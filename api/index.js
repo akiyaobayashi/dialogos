@@ -153,7 +153,16 @@ app.get("/me/debug", async (req, res, next) => {
     if (u.subscription_id) {
       try {
         const sub = await stripe.subscriptions.retrieve(u.subscription_id);
-        result.stripe.by_subscription_id = { found: true, status: sub.status, current_period_end: sub.current_period_end };
+        result.stripe.by_subscription_id = {
+          found: true,
+          status: sub.status,
+          current_period_end: sub.current_period_end ?? "UNDEFINED",
+          current_period_end_type: typeof sub.current_period_end,
+          current_period_end_iso: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : "NULL",
+          billing_cycle_anchor: sub.billing_cycle_anchor ?? "UNDEFINED",
+          items_count: sub.items?.data?.length ?? "UNDEFINED",
+          price_id: sub.items?.data?.[0]?.price?.id ?? "UNDEFINED",
+        };
       } catch (e) { result.stripe.by_subscription_id = { found: false, error: e.message }; }
     } else { result.stripe.by_subscription_id = "no subscription_id in DB"; }
 
