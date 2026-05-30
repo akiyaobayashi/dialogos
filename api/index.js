@@ -322,7 +322,6 @@ app.use((err, _req, res, _next) => {
   res.status(err.status || 500).json({
     code: err.code || "SERVER_ERROR",
     message: err.publicMessage || "処理に失敗しました。しばらく待ってから再試行してください。",
-    detail: process.env.NODE_ENV === "production" ? String(err.message || "").slice(0, 240) : String(err.stack || err.message || "").slice(0, 500),
   });
 });
 
@@ -643,7 +642,9 @@ async function sbRequest(table, query = "", options = {}) {
     throw error;
   }
   if (response.status === 204) return [];
-  return response.json();
+  const responseText = await response.text();
+  if (!responseText.trim()) return [];
+  return JSON.parse(responseText);
 }
 
 function sbGet(table, query) {
