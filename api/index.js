@@ -128,7 +128,7 @@ app.get("/me", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// 支払い成功後のリカバリー：webhookが失敗してもここで確実に反映する
+// 支払い成功後のリカバリー（session_id 指定）
 app.post("/me/sync-session", async (req, res, next) => {
   try {
     if (!stripe) return res.status(503).json({ code: "STRIPE_NOT_CONFIGURED", message: "Stripe が設定されていません。" });
@@ -143,9 +143,35 @@ app.post("/me/sync-session", async (req, res, next) => {
       return res.status(403).json({ code: "FORBIDDEN", message: "このセッションはこの端末のものではありません。" });
     }
 
-    await handleCheckoutCompleted(session);
-    const user = await getUserById(req.user.id);
-    res.json(await publicUser(user));
+    const user = await getOrCreateUser(req.guestId);
+    await applySession(session, req.guestId, user);
+    const updated = await getUserById(req.user.id);
+    res.json(await publicUser(updated));
+  } catch (err) { next(err); }
+});
+
+// 購入済みリカバリー（session_id 不要 — Stripe Search で guest_id から逆引き）
+app.post("/me/restore-subscription", async (req, res, next) => {
+  try {
+    if (!stripe) return res.status(503).json({ code: "STRIPE_NOT_CONFIGURED", message: "Stripe が設定されていません。" });
+
+    const results = await stripe.checkout.sessions.search({
+      query: `metadata['guest_id']:'${req.guestId}'`,
+      limit: 10,
+    });
+
+    const paidSession = results.data.find(
+      (s) => s.payment_status === "paid" || s.status === "complete"
+    );
+
+    if (!paidSession) {
+      return res.status(404).json({ code: "NO_PAYMENT", message: "この端末での購入履歴が見つかりませんでした。" });
+    }
+
+    const user = await getOrCreateUser(req.guestId);
+    await applySession(paidSession, req.guestId, user);
+    const updated = await getUserById(user.id);
+    res.json(await publicUser(updated));
   } catch (err) { next(err); }
 });
 
@@ -251,7 +277,7 @@ app.post("/stripe/checkout", async (req, res, next) => {
         },
       } : undefined,
     });
-    res.json({ url: session.url });
+    res.json({ url: session.url, sessionId: session.id });
   } catch (err) {
     next(err);
   }
@@ -362,40 +388,57 @@ async function handleCheckoutCompleted(session) {
     });
     return;
   }
+  const user = await getOrCreateUser(guestId);
+  await applySession(session, guestId, user);
+}
+
+// 冪等なセッション適用：重複でもサブスク状態は常に更新する
+async function applySession(session, guestId, user) {
+  const pkg = PACKAGES.find((item) => item.id === session.metadata?.packageId);
+  const credits = Number(session.metadata?.credits || pkg?.credits || 0);
 
   const existing = await sbGet("purchases", `stripe_session_id=eq.${encodeURIComponent(session.id)}&limit=1`);
-  if (existing.length) return;
-
-  const user = await getOrCreateUser(guestId);
-  await sbInsert("purchases", {
-    user_id: user.id,
-    guest_id: guestId,
-    stripe_session_id: session.id,
-    stripe_customer_id: typeof session.customer === "string" ? session.customer : null,
-    package_id: pkg.id,
-    kind: pkg.kind,
-    amount_jpy: session.amount_total || pkg.price_jpy,
-    credits_added: credits,
-    status: "completed",
-    completed_at: new Date().toISOString(),
-  }, false);
 
   const patch = {
-    credits: Number(user.credits || 0) + credits,
     email: session.customer_details?.email || user.email || null,
     stripe_customer_id: typeof session.customer === "string" ? session.customer : user.stripe_customer_id || null,
   };
 
+  if (!existing.length) {
+    // 初回処理：クレジットを加算して購入記録を作成
+    patch.credits = Number(user.credits || 0) + credits;
+    if (credits) {
+      await sbInsert("purchases", {
+        user_id: user.id,
+        guest_id: guestId,
+        stripe_session_id: session.id,
+        stripe_customer_id: typeof session.customer === "string" ? session.customer : null,
+        package_id: pkg?.id,
+        kind: pkg?.kind,
+        amount_jpy: session.amount_total || pkg?.price_jpy,
+        credits_added: credits,
+        status: "completed",
+        completed_at: new Date().toISOString(),
+      }, false);
+    }
+  }
+
+  // サブスクリプション状態は重複に関わらず常に最新に更新する
   if (session.mode === "subscription" && session.subscription && stripe) {
-    const sub = await stripe.subscriptions.retrieve(session.subscription);
-    Object.assign(patch, {
-      subscription_id: sub.id,
-      subscription_status: sub.status,
-      subscription_plan: pkg.id,
-      subscription_current_period_end: toIsoFromUnix(sub.current_period_end),
-      subscription_cancel_at_period_end: !!sub.cancel_at_period_end,
-    });
-    await unlockAllCharacters(user.id);
+    const subId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
+    if (subId) {
+      const sub = await stripe.subscriptions.retrieve(subId);
+      if (["active", "trialing"].includes(sub.status)) {
+        Object.assign(patch, {
+          subscription_id: sub.id,
+          subscription_status: sub.status,
+          subscription_plan: pkg?.id || "memory_book_monthly",
+          subscription_current_period_end: toIsoFromUnix(sub.current_period_end),
+          subscription_cancel_at_period_end: !!sub.cancel_at_period_end,
+        });
+        await unlockAllCharacters(user.id);
+      }
+    }
   }
 
   await sbUpdate("users", `id=eq.${encodeURIComponent(user.id)}`, patch);

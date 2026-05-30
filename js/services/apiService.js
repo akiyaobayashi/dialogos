@@ -85,4 +85,8 @@ export const apiService = {
       body: JSON.stringify({ sessionId }),
     });
   },
+
+  restoreSubscription() {
+    return request("/api/me/restore-subscription", { method: "POST" });
+  },
 };

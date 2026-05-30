@@ -24,7 +24,8 @@ async function boot() {
 
   const params = new URLSearchParams(window.location.search);
   if (params.get("payment") === "success") {
-    const sessionId = params.get("session_id");
+    const sessionId = params.get("session_id") || sessionStorage.getItem("dialogos.pendingSession");
+    sessionStorage.removeItem("dialogos.pendingSession");
     history.replaceState({}, "", window.location.pathname);
     if (sessionId) {
       try {
@@ -591,7 +592,8 @@ async function handlePurchaseClick(pkgId, errorElementId) {
   if (loading) loading.style.display = "block";
 
   try {
-    const { url } = await apiService.createCheckout(pkgId);
+    const { url, sessionId } = await apiService.createCheckout(pkgId);
+    if (sessionId) sessionStorage.setItem("dialogos.pendingSession", sessionId);
     window.location.href = url;
   } catch (err) {
     const msg = err.code === "STRIPE_NOT_CONFIGURED"
@@ -664,9 +666,32 @@ function renderSubStatus(sub) {
         </p>
         <div class="sub-actions">
           <button class="primary-button" data-route="purchase">記憶の書を開く</button>
+          <button class="secondary-button" id="restoreSubBtn" style="margin-top:8px;width:100%">購入済みの方：ここを押して反映する</button>
         </div>
+        <p id="restoreSubError" style="color:#e08080;font-size:13px;margin:8px 0 0;min-height:1em"></p>
       </div>
     `;
+    document.getElementById("restoreSubBtn")?.addEventListener("click", handleRestoreSubscription);
+  }
+}
+
+async function handleRestoreSubscription() {
+  const btn = document.getElementById("restoreSubBtn");
+  const errEl = document.getElementById("restoreSubError");
+  if (btn) { btn.textContent = "確認中…"; btn.disabled = true; }
+  if (errEl) errEl.textContent = "";
+  try {
+    const user = await apiService.restoreSubscription();
+    state.user = user;
+    updateMeter(state.user);
+    await refreshUser();
+    renderSubscription();
+  } catch (err) {
+    const msg = err.code === "NO_PAYMENT"
+      ? "購入履歴が見つかりませんでした。Stripeの受領メールに記載のセッションIDをお知らせください。"
+      : "同期に失敗しました。しばらく待ってから再試行してください。";
+    if (errEl) errEl.textContent = msg;
+    if (btn) { btn.textContent = "購入済みの方：ここを押して反映する"; btn.disabled = false; }
   }
 }
 
