@@ -472,10 +472,13 @@ app.get("/subscription", async (req, res, next) => {
     let stripeSub = null;
 
     if (stripe) {
+      const EXPAND_INVOICE = { expand: ["latest_invoice"] };
+      const EXPAND_LIST_INVOICE = { expand: ["data.latest_invoice"] };
+
       // 手段1: subscription_id で直接取得（最速）
       if (req.user.subscription_id) {
         try {
-          stripeSub = await stripe.subscriptions.retrieve(req.user.subscription_id);
+          stripeSub = await stripe.subscriptions.retrieve(req.user.subscription_id, EXPAND_INVOICE);
         } catch (e) {
           console.error("[subscription] retrieve by id failed:", e.message);
         }
@@ -487,6 +490,7 @@ app.get("/subscription", async (req, res, next) => {
           const list = await stripe.subscriptions.list({
             customer: req.user.stripe_customer_id,
             limit: 5,
+            ...EXPAND_LIST_INVOICE,
           });
           stripeSub = list.data.find((s) =>
             ["active", "trialing", "past_due"].includes(s.status)
@@ -502,6 +506,7 @@ app.get("/subscription", async (req, res, next) => {
           const results = await stripe.subscriptions.search({
             query: `metadata['guest_id']:'${req.guestId}'`,
             limit: 5,
+            ...EXPAND_LIST_INVOICE,
           });
           stripeSub = results.data.find((s) =>
             ["active", "trialing"].includes(s.status)
@@ -516,7 +521,11 @@ app.get("/subscription", async (req, res, next) => {
         try {
           const customers = await stripe.customers.list({ email: req.user.email, limit: 3 });
           for (const customer of customers.data) {
-            const subs = await stripe.subscriptions.list({ customer: customer.id, limit: 5 });
+            const subs = await stripe.subscriptions.list({
+              customer: customer.id,
+              limit: 5,
+              ...EXPAND_LIST_INVOICE,
+            });
             const found = subs.data.find((s) =>
               ["active", "trialing", "past_due"].includes(s.status)
             );
@@ -591,7 +600,11 @@ app.post("/stripe/cancel", async (req, res, next) => {
     if (!req.user.subscription_id || req.user.subscription_status !== "active") {
       return res.status(400).json({ code: "NO_ACTIVE_SUB", message: "有効な記憶の書がありません。" });
     }
-    const sub = await stripe.subscriptions.update(req.user.subscription_id, { cancel_at_period_end: true });
+    const sub = await stripe.subscriptions.update(
+      req.user.subscription_id,
+      { cancel_at_period_end: true },
+      { expand: ["latest_invoice"] }
+    );
     const currentPeriodEnd = toIsoFromUnix(subPeriodEnd(sub));
     await sbUpdate("users", `id=eq.${encodeURIComponent(req.user.id)}`, {
       subscription_cancel_at_period_end: true,
@@ -703,7 +716,7 @@ async function applySession(session, guestId, user) {
   if (session.mode === "subscription" && session.subscription && stripe) {
     const subId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
     if (subId) {
-      const sub = await stripe.subscriptions.retrieve(subId);
+      const sub = await stripe.subscriptions.retrieve(subId, { expand: ["latest_invoice"] });
       if (["active", "trialing"].includes(sub.status)) {
         Object.assign(patch, {
           subscription_id: sub.id,
@@ -979,7 +992,14 @@ function toIsoFromUnix(value) {
 // Stripe SDK v22 の新 API バージョンでは current_period_end が返らない場合がある
 // billing_cycle_anchor（次回更新日）をフォールバックとして使う
 function subPeriodEnd(sub) {
-  return sub.current_period_end ?? sub.billing_cycle_anchor ?? null;
+  // Stripe SDK v22 では current_period_end が返らない場合がある
+  // latest_invoice.period_end（最新請求書の終了日）が最も正確
+  // billing_cycle_anchor（課金アンカー日 = 購入日）は使わない
+  if (sub.current_period_end) return sub.current_period_end;
+  if (sub.latest_invoice && typeof sub.latest_invoice === "object" && sub.latest_invoice.period_end) {
+    return sub.latest_invoice.period_end;
+  }
+  return null;
 }
 
 function hasSupabaseConfig() {
