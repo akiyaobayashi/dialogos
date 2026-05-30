@@ -147,27 +147,20 @@ function render() {
 function isSubscriber() {
   const u = state.user;
   if (!u) return false;
-  if (u.unlocked_characters?.includes("all")) {
-    // unlocked_characters がある場合はサブスクか一括購入
-    // ただし期間切れの解約申請済みは除外
-    const status = u.subscription_status;
-    const cancelAtEnd = u.subscription_cancel_at_period_end;
-    const periodEnd = u.subscription_current_period_end;
-    if ((status === "active" || status === "trialing") && cancelAtEnd && periodEnd) {
-      return new Date(periodEnd) > new Date();
-    }
-    return true;
-  }
   const status = u.subscription_status;
-  const periodEnd = u.subscription_current_period_end;
   const cancelAtEnd = u.subscription_cancel_at_period_end;
+  const periodEnd = u.subscription_current_period_end;
+
   if (status === "active" || status === "trialing") {
     if (cancelAtEnd && periodEnd && new Date(periodEnd) <= new Date()) return false;
     return true;
   }
-  if (status === "canceled" && cancelAtEnd && periodEnd) {
+  // canceled でも period_end が未来なら有効（cancelAtEnd の値に依存しない）
+  if (status === "canceled" && periodEnd) {
     return new Date(periodEnd) > new Date();
   }
+  // unlocked_characters で解放済み（一括購入など）
+  if (u.unlocked_characters?.includes("all")) return true;
   return false;
 }
 

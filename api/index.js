@@ -257,20 +257,34 @@ app.post("/me/restore-by-email", async (req, res, next) => {
     }
 
     let activeSub = null;
+    // 優先1: active（cancel_at_period_end: true の解約申請中を含む）
     for (const customer of customers.data) {
       const subs = await stripe.subscriptions.list({ customer: customer.id, status: "active", limit: 5 });
       if (subs.data.length) { activeSub = subs.data[0]; break; }
     }
+    // 優先2: trialing / past_due
     if (!activeSub) {
-      // activeがなければtrialing/past_dueも探す
       for (const customer of customers.data) {
         const subs = await stripe.subscriptions.list({ customer: customer.id, limit: 5 });
         activeSub = subs.data.find((s) => ["trialing", "past_due"].includes(s.status));
         if (activeSub) break;
       }
     }
+    // 優先3: canceled でも current_period_end が未来のものは同期対象とする
+    //        （即時解約やStripeが先行して canceled にした場合の救済）
     if (!activeSub) {
-      return res.status(404).json({ code: "NO_ACTIVE_SUB", message: "そのメールアドレスに有効なサブスクリプションが見つかりません。" });
+      const nowUnix = Math.floor(Date.now() / 1000);
+      for (const customer of customers.data) {
+        const subs = await stripe.subscriptions.list({ customer: customer.id, status: "canceled", limit: 10 });
+        activeSub = subs.data.find((s) => {
+          const end = subPeriodEnd(s);
+          return end && end > nowUnix;
+        });
+        if (activeSub) break;
+      }
+    }
+    if (!activeSub) {
+      return res.status(404).json({ code: "NO_ACTIVE_SUB", message: "そのメールアドレスに有効なサブスクリプションが見つかりません。解約後も利用期限内であれば同期できます。期限切れの場合は再購入をご検討ください。" });
     }
 
     const user = await getOrCreateUser(req.guestId);
@@ -1031,8 +1045,9 @@ function hasActiveMemoryBook(user) {
     if (cancelAtEnd && periodEnd && new Date(periodEnd) <= new Date()) return false;
     return true;
   }
-  // canceledでも期間内ならアクセス維持（webhookが先行した場合のフォールバック）
-  if (status === "canceled" && cancelAtEnd && periodEnd) {
+  // canceled でも current_period_end が未来なら有効
+  // （cancel_at_period_end の値に関わらず: 即時解約・期間終了ともに対応）
+  if (status === "canceled" && periodEnd) {
     return new Date(periodEnd) > new Date();
   }
   return false;
