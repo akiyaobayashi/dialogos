@@ -643,7 +643,16 @@ async function renderSubscription() {
   `;
 
   try {
-    const sub = await apiService.getSubscription();
+    let sub = await apiService.getSubscription();
+
+    // 有効なのに更新日が空の場合、自動でStripeから取得し直す
+    if ((sub.status === "active" || sub.status === "trialing") && !sub.currentPeriodEnd) {
+      try {
+        await apiService.restoreSubscription();
+        sub = await apiService.getSubscription();
+      } catch {}
+    }
+
     renderSubStatus(sub);
   } catch {
     const el = document.getElementById("subStatus");
@@ -668,15 +677,27 @@ function renderSubStatus(sub) {
   if (showActiveCard) {
     const credits = state.user?.credits ?? "—";
     const isCanceling = sub.cancelAtPeriodEnd || sub.status === "canceled";
+    const dateDisplay = periodEnd
+      ? periodEndStr
+      : `<span style="color:#e08080">取得できませんでした</span>`;
     const cancelNote = isCanceling
-      ? `<p style="color:#e08080;font-size:13px;margin:0">解約申請済み — ${periodEndStr} まで利用可能</p>`
-      : `<p class="sub-period">次回更新：${periodEndStr}</p>`;
+      ? `<p style="color:#e08080;font-size:13px;margin:0">解約申請済み — ${periodEnd ? periodEndStr : "—"} まで利用可能</p>`
+      : `<p class="sub-period">次回更新：${dateDisplay}</p>`;
+
+    const emailFallback = !periodEnd ? `
+      <div id="restoreEmailSection" style="margin-top:10px">
+        <p style="color:rgba(245,234,214,0.6);font-size:12px;margin:0 0 5px">更新日を取得できませんでした。Stripeの受領メールに記載のアドレスを入力してください</p>
+        <input id="restoreEmailInput" type="email" placeholder="購入時のメールアドレス" style="width:100%;box-sizing:border-box;padding:7px 10px;border-radius:6px;border:1px solid rgba(245,234,214,0.3);background:rgba(0,0,0,0.3);color:#f5ead6;font-size:13px">
+        <button class="secondary-button" id="restoreByEmailBtn" style="margin-top:5px;width:100%;font-size:13px">メールアドレスで同期</button>
+        <p id="restoreSubError" style="color:#e08080;font-size:12px;margin:5px 0 0;min-height:1em"></p>
+      </div>` : "";
 
     el.innerHTML = `
       <div class="sub-card active">
         <div class="sub-status-badge active">${isCanceling ? "解約申請済み" : "有効"}</div>
         <div class="sub-plan">記憶の書 — ¥680 / 月</div>
         ${cancelNote}
+        ${emailFallback}
         <div class="sub-credits">現在の灯火：${credits}</div>
         <div class="sub-actions">
           <button class="primary-button" id="portalBtn">Stripe で管理する</button>
@@ -686,6 +707,7 @@ function renderSubStatus(sub) {
     `;
     document.getElementById("portalBtn")?.addEventListener("click", handlePortal);
     document.getElementById("cancelBtn")?.addEventListener("click", handleCancel);
+    document.getElementById("restoreByEmailBtn")?.addEventListener("click", handleRestoreByEmail);
 
   } else {
     const label      = sub.status === "canceled" ? "解約済み" : sub.status === "past_due" ? "支払い遅延" : "未加入";
