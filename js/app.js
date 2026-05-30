@@ -141,8 +141,30 @@ function render() {
 
 // ── 賢者一覧 ──────────────────────────────────────────────────────────────────
 function isSubscriber() {
-  return state.user?.subscription_status === "active" ||
-         state.user?.unlocked_characters?.includes("all");
+  const u = state.user;
+  if (!u) return false;
+  if (u.unlocked_characters?.includes("all")) {
+    // unlocked_characters がある場合はサブスクか一括購入
+    // ただし期間切れの解約申請済みは除外
+    const status = u.subscription_status;
+    const cancelAtEnd = u.subscription_cancel_at_period_end;
+    const periodEnd = u.subscription_current_period_end;
+    if ((status === "active" || status === "trialing") && cancelAtEnd && periodEnd) {
+      return new Date(periodEnd) > new Date();
+    }
+    return true;
+  }
+  const status = u.subscription_status;
+  const periodEnd = u.subscription_current_period_end;
+  const cancelAtEnd = u.subscription_cancel_at_period_end;
+  if (status === "active" || status === "trialing") {
+    if (cancelAtEnd && periodEnd && new Date(periodEnd) <= new Date()) return false;
+    return true;
+  }
+  if (status === "canceled" && cancelAtEnd && periodEnd) {
+    return new Date(periodEnd) > new Date();
+  }
+  return false;
 }
 
 function renderList() {
@@ -633,22 +655,32 @@ function renderSubStatus(sub) {
   const el = document.getElementById("subStatus");
   if (!el) return;
 
-  if (sub.status === "active") {
-    const until   = new Date(sub.currentPeriodEnd).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" });
+  const periodEnd = sub.currentPeriodEnd ? new Date(sub.currentPeriodEnd) : null;
+  const periodEndStr = periodEnd
+    ? periodEnd.toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })
+    : "—";
+  const stillInPeriod = periodEnd && periodEnd > new Date();
+
+  // activeまたは「canceledだが期間内」の場合はアクティブカードを表示
+  const showActiveCard = sub.status === "active" || sub.status === "trialing"
+    || (sub.status === "canceled" && sub.cancelAtPeriodEnd && stillInPeriod);
+
+  if (showActiveCard) {
     const credits = state.user?.credits ?? "—";
-    const cancelNote = sub.cancelAtPeriodEnd
-      ? `<p style="color:#e08080;font-size:13px;margin:0">解約申請済み — ${until} まで利用可能</p>`
-      : `<p class="sub-period">次回更新：${until}</p>`;
+    const isCanceling = sub.cancelAtPeriodEnd || sub.status === "canceled";
+    const cancelNote = isCanceling
+      ? `<p style="color:#e08080;font-size:13px;margin:0">解約申請済み — ${periodEndStr} まで利用可能</p>`
+      : `<p class="sub-period">次回更新：${periodEndStr}</p>`;
 
     el.innerHTML = `
       <div class="sub-card active">
-        <div class="sub-status-badge active">${sub.cancelAtPeriodEnd ? "解約申請済み" : "有効"}</div>
+        <div class="sub-status-badge active">${isCanceling ? "解約申請済み" : "有効"}</div>
         <div class="sub-plan">記憶の書 — ¥680 / 月</div>
         ${cancelNote}
         <div class="sub-credits">現在の灯火：${credits}</div>
         <div class="sub-actions">
           <button class="primary-button" id="portalBtn">Stripe で管理する</button>
-          ${sub.cancelAtPeriodEnd ? "" : `<button class="secondary-button sub-cancel-btn" id="cancelBtn">解約する</button>`}
+          ${isCanceling ? "" : `<button class="secondary-button sub-cancel-btn" id="cancelBtn">解約する</button>`}
         </div>
       </div>
     `;

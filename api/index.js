@@ -366,14 +366,38 @@ app.post("/stripe/checkout", async (req, res, next) => {
   }
 });
 
-app.get("/subscription", (req, res) => {
-  res.json({
-    status: req.user.subscription_status || "none",
-    plan: req.user.subscription_plan || null,
-    currentPeriodEnd: req.user.subscription_current_period_end || null,
-    cancelAtPeriodEnd: !!req.user.subscription_cancel_at_period_end,
-    hasCustomer: !!req.user.stripe_customer_id,
-  });
+app.get("/subscription", async (req, res, next) => {
+  try {
+    // Stripeから常に最新の日付・状態を取得してDBを同期する
+    if (stripe && req.user.subscription_id) {
+      try {
+        const sub = await stripe.subscriptions.retrieve(req.user.subscription_id);
+        const freshData = {
+          subscription_status: sub.status,
+          subscription_current_period_end: toIsoFromUnix(sub.current_period_end),
+          subscription_cancel_at_period_end: !!sub.cancel_at_period_end,
+        };
+        await sbUpdate("users", `id=eq.${encodeURIComponent(req.user.id)}`, freshData);
+        return res.json({
+          status: sub.status,
+          plan: req.user.subscription_plan || null,
+          currentPeriodEnd: toIsoFromUnix(sub.current_period_end),
+          cancelAtPeriodEnd: !!sub.cancel_at_period_end,
+          hasCustomer: !!req.user.stripe_customer_id,
+        });
+      } catch (stripeErr) {
+        console.error("[subscription] Stripe fetch failed, falling back to DB:", stripeErr.message);
+      }
+    }
+    // Stripeが使えない場合はDBの値にフォールバック
+    res.json({
+      status: req.user.subscription_status || "none",
+      plan: req.user.subscription_plan || null,
+      currentPeriodEnd: req.user.subscription_current_period_end || null,
+      cancelAtPeriodEnd: !!req.user.subscription_cancel_at_period_end,
+      hasCustomer: !!req.user.stripe_customer_id,
+    });
+  } catch (err) { next(err); }
 });
 
 app.post("/stripe/portal", async (req, res, next) => {
@@ -742,7 +766,20 @@ function checkRateLimit(ip, guestId) {
 }
 
 function hasActiveMemoryBook(user) {
-  return user?.subscription_status === "active" || user?.subscription_status === "trialing";
+  const status = user?.subscription_status;
+  const periodEnd = user?.subscription_current_period_end;
+  const cancelAtEnd = user?.subscription_cancel_at_period_end;
+
+  if (status === "active" || status === "trialing") {
+    // 解約申請済みで期間が既に終わっている場合はアクセス不可
+    if (cancelAtEnd && periodEnd && new Date(periodEnd) <= new Date()) return false;
+    return true;
+  }
+  // canceledでも期間内ならアクセス維持（webhookが先行した場合のフォールバック）
+  if (status === "canceled" && cancelAtEnd && periodEnd) {
+    return new Date(periodEnd) > new Date();
+  }
+  return false;
 }
 
 function shortMemoryNotice(user) {
