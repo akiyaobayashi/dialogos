@@ -332,7 +332,7 @@ async function applySubscriptionDirectly(sub, guestId, user) {
     subscription_id: sub.id,
     subscription_status: sub.status,
     subscription_plan: pkg?.id || "memory_book_monthly",
-    subscription_current_period_end: toIsoFromUnix(sub.current_period_end),
+    subscription_current_period_end: toIsoFromUnix(subPeriodEnd(sub)),
     subscription_cancel_at_period_end: !!sub.cancel_at_period_end,
     stripe_customer_id: typeof sub.customer === "string" ? sub.customer : user.stripe_customer_id || null,
   };
@@ -539,7 +539,7 @@ app.get("/subscription", async (req, res, next) => {
         subscription_id: stripeSub.id,
         subscription_status: stripeSub.status,
         subscription_plan: pkg?.id || req.user.subscription_plan || null,
-        subscription_current_period_end: toIsoFromUnix(stripeSub.current_period_end),
+        subscription_current_period_end: toIsoFromUnix(subPeriodEnd(stripeSub)),
         subscription_cancel_at_period_end: !!stripeSub.cancel_at_period_end,
         stripe_customer_id: customerId,
       });
@@ -552,7 +552,7 @@ app.get("/subscription", async (req, res, next) => {
       return res.json({
         status: stripeSub.status,
         plan: pkg?.id || req.user.subscription_plan || null,
-        currentPeriodEnd: toIsoFromUnix(stripeSub.current_period_end),
+        currentPeriodEnd: toIsoFromUnix(subPeriodEnd(stripeSub)),
         cancelAtPeriodEnd: !!stripeSub.cancel_at_period_end,
         hasCustomer: !!customerId,
       });
@@ -592,7 +592,7 @@ app.post("/stripe/cancel", async (req, res, next) => {
       return res.status(400).json({ code: "NO_ACTIVE_SUB", message: "有効な記憶の書がありません。" });
     }
     const sub = await stripe.subscriptions.update(req.user.subscription_id, { cancel_at_period_end: true });
-    const currentPeriodEnd = toIsoFromUnix(sub.current_period_end);
+    const currentPeriodEnd = toIsoFromUnix(subPeriodEnd(sub));
     await sbUpdate("users", `id=eq.${encodeURIComponent(req.user.id)}`, {
       subscription_cancel_at_period_end: true,
       subscription_current_period_end: currentPeriodEnd,
@@ -709,7 +709,7 @@ async function applySession(session, guestId, user) {
           subscription_id: sub.id,
           subscription_status: sub.status,
           subscription_plan: pkg?.id || "memory_book_monthly",
-          subscription_current_period_end: toIsoFromUnix(sub.current_period_end),
+          subscription_current_period_end: toIsoFromUnix(subPeriodEnd(sub)),
           subscription_cancel_at_period_end: !!sub.cancel_at_period_end,
         });
         await unlockAllCharacters(user.id);
@@ -726,7 +726,7 @@ async function handleSubscriptionChanged(sub) {
   if (!user) return;
   await sbUpdate("users", `id=eq.${encodeURIComponent(user.id)}`, {
     subscription_status: sub.status,
-    subscription_current_period_end: toIsoFromUnix(sub.current_period_end),
+    subscription_current_period_end: toIsoFromUnix(subPeriodEnd(sub)),
     subscription_cancel_at_period_end: !!sub.cancel_at_period_end,
   });
 }
@@ -974,6 +974,12 @@ async function publicUser(user) {
 
 function toIsoFromUnix(value) {
   return value ? new Date(value * 1000).toISOString() : null;
+}
+
+// Stripe SDK v22 の新 API バージョンでは current_period_end が返らない場合がある
+// billing_cycle_anchor（次回更新日）をフォールバックとして使う
+function subPeriodEnd(sub) {
+  return sub.current_period_end ?? sub.billing_cycle_anchor ?? null;
 }
 
 function hasSupabaseConfig() {
