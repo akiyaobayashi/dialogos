@@ -901,9 +901,9 @@ async function getRecentMessages(conversationId, limit = MAX_RECENT_MESSAGES) {
 
 async function spendUsage(userId) {
   const user = await getUserById(userId);
-  const patch = Number(user.free_count) > 0
-    ? { free_count: Number(user.free_count) - 1 }
-    : { credits: Math.max(0, Number(user.credits) - 1) };
+  const patch = Number(user.credits) > 0
+    ? { credits: Number(user.credits) - 1 }
+    : { free_count: Math.max(0, Number(user.free_count) - 1) };
   await sbUpdate("users", `id=eq.${encodeURIComponent(userId)}`, patch);
   await sbInsert("usage_events", { user_id: userId }, false);
 }
