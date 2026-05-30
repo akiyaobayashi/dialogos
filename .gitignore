@@ -53,7 +53,7 @@ app.*.map.json
 node_modules/
 
 # local databases / runtime data
-data/
+/data/
 *.sqlite
 *.sqlite3
 *.db
@@ -68,3 +68,6 @@ Thumbs.db
 
 # Vercel local cache
 .vercel/
+
+!js/data/
+!js/data/*.js
