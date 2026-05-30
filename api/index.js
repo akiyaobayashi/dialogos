@@ -996,12 +996,23 @@ function toIsoFromUnix(value) {
 // Stripe SDK v22 の新 API バージョンでは current_period_end が返らない場合がある
 // billing_cycle_anchor（次回更新日）をフォールバックとして使う
 function subPeriodEnd(sub) {
-  // Stripe SDK v22 では current_period_end が返らない場合がある
-  // latest_invoice.period_end（最新請求書の終了日）が最も正確
-  // billing_cycle_anchor（課金アンカー日 = 購入日）は使わない
+  // 優先1: Stripe が直接返す場合
   if (sub.current_period_end) return sub.current_period_end;
+  // 優先2: 最新請求書の期間終了日
   if (sub.latest_invoice && typeof sub.latest_invoice === "object" && sub.latest_invoice.period_end) {
     return sub.latest_invoice.period_end;
+  }
+  // 優先3: billing_cycle_anchor から次回更新日を計算
+  // Stripe SDK v22 では current_period_end が返らない環境がある
+  if (sub.billing_cycle_anchor) {
+    const anchor = new Date(sub.billing_cycle_anchor * 1000);
+    const next = new Date(anchor);
+    // 月次前提で次の「未来の」更新日を探す
+    next.setMonth(next.getMonth() + 1);
+    while (next <= new Date()) {
+      next.setMonth(next.getMonth() + 1);
+    }
+    return Math.floor(next.getTime() / 1000);
   }
   return null;
 }
