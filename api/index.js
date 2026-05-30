@@ -9,6 +9,9 @@ const app = express();
 const FREE_COUNT = Number(process.env.FREE_COUNT || 10);
 const MAX_RECENT_MESSAGES = Number(process.env.MAX_RECENT_MESSAGES || 20);
 const MAX_FREE_RECENT_MESSAGES = Number(process.env.MAX_FREE_RECENT_MESSAGES || 8);
+const MAX_PAID_RECENT_MESSAGES = Math.min(MAX_RECENT_MESSAGES, Number(process.env.MAX_PAID_RECENT_MESSAGES || 14));
+const MEMORY_UPDATE_INTERVAL = Number(process.env.MEMORY_UPDATE_INTERVAL || 5);
+const MEMORY_UPDATE_MODEL = process.env.OPENAI_MEMORY_MODEL || "gpt-4.1-mini";
 const RATE_WINDOW_MS = 60_000;
 const RATE_LIMIT = Number(process.env.RATE_LIMIT_PER_MINUTE || 10);
 
@@ -726,15 +729,21 @@ app.post("/chat", async (req, res, next) => {
     const hasLongMemory = hasActiveMemoryBook(req.user);
     await saveMessage(conversation.id, "user", message);
 
-    const history = await getRecentMessages(conversation.id, hasLongMemory ? MAX_RECENT_MESSAGES : MAX_FREE_RECENT_MESSAGES);
-    const memory = hasLongMemory ? await getMemoryText(req.user.id, sage.id) : shortMemoryNotice(req.user);
-    const summary = hasLongMemory ? conversation.summary || "" : "";
-    const reply = await generateReply({ sage, history, summary, memory, hasLongMemory });
+    const history = await getRecentMessages(conversation.id, hasLongMemory ? MAX_PAID_RECENT_MESSAGES : MAX_FREE_RECENT_MESSAGES);
+    const selectedMemory = hasLongMemory
+      ? await getSelectedMemory({ userId: req.user.id, philosopherId: sage.id, currentMessage: message, conversationSummary: conversation.summary || "" })
+      : { currentUserState: shortMemoryNotice(req.user), relevantMemory: "", activeTheme: "" };
+    const reply = await generateReply({ sage, history, selectedMemory, hasLongMemory });
 
     await saveMessage(conversation.id, "assistant", reply);
     await spendUsage(req.user.id);
-    await updateConversation(conversation.id, hasLongMemory ? maybeSummarize(conversation.summary, history, message, reply) : conversation.summary || "");
-    if (hasLongMemory) await updateLongTermMemory(req.user.id, sage.id, message);
+    if (hasLongMemory && shouldUpdateMemory({ history, userMessage: message })) {
+      const memoryUpdate = await extractMemoryUpdates({ sage, history, userMessage: message, assistantReply: reply, currentSummary: conversation.summary || "" });
+      await applyMemoryUpdates({ userId: req.user.id, philosopherId: sage.id, update: memoryUpdate });
+      await updateConversation(conversation.id, memoryUpdate?.conversation_state_memory_update || conversation.summary || "");
+    } else {
+      await updateConversation(conversation.id, conversation.summary || "");
+    }
 
     const user = await getUserById(req.user.id);
     res.json({ conversationId: conversation.id, reply, user: await publicUser(user) });
@@ -899,62 +908,229 @@ async function spendUsage(userId) {
   await sbInsert("usage_events", { user_id: userId }, false);
 }
 
-async function getMemoryText(userId, characterId) {
-  const [user, memories] = await Promise.all([
+
+async function getSelectedMemory({ userId, philosopherId, currentMessage, conversationSummary }) {
+  const [user, rows] = await Promise.all([
     getUserById(userId),
     sbGet(
       "memories",
-      `user_id=eq.${encodeURIComponent(userId)}&or=(character_related.eq.${encodeURIComponent(characterId)},character_related.eq.global)&order=importance.desc,updated_at.desc&limit=8`
+      `user_id=eq.${encodeURIComponent(userId)}&or=(character_related.eq.${encodeURIComponent(philosopherId)},character_related.eq.global)&order=importance.desc,updated_at.desc&limit=80`
     ),
   ]);
-  return [
+  const memories = rows.map(parseMemoryRow);
+  const activeThemes = memories.filter((memory) => memory.type === "active_theme_memory");
+  const selected = selectRelevantMemories(memories, currentMessage, philosopherId);
+  const activeTheme = activeThemes.slice(0, 3).map((memory) => memory.text).join("\n");
+  const currentUserState = [
     user?.display_name ? `呼び名: ${user.display_name}` : "",
-    ...memories.map((memory) => `重要度${memory.importance}: ${memory.summary}`),
-  ].filter(Boolean).join("\n");
+    activeTheme ? `現在のテーマ:\n${limitText(activeTheme, 600)}` : "",
+    conversationSummary ? `直近の対話状態:\n${limitText(conversationSummary, 800)}` : "",
+  ].filter(Boolean).join("\n\n");
+
+  return {
+    currentUserState: limitText(currentUserState || "まだ長期的な状態記録は少ない。", 900),
+    relevantMemory: limitText(selected.map(formatMemoryForPrompt).join("\n"), 1400),
+    activeTheme: limitText(activeTheme, 700),
+  };
 }
 
-async function updateLongTermMemory(userId, characterId, userMessage) {
-  const raw = userMessage.trim();
-  if (raw.length < 12) return;
-  const summary = inferMemorySummary(raw);
-  const existing = await sbGet(
-    "memories",
-    `user_id=eq.${encodeURIComponent(userId)}&character_related=eq.${encodeURIComponent(characterId)}&summary=eq.${encodeURIComponent(summary.summary)}&limit=1`
-  );
-  if (existing[0]) {
-    await sbUpdate("memories", `id=eq.${encodeURIComponent(existing[0].id)}`, {
-      importance: Math.max(Number(existing[0].importance || 1), summary.importance),
-      updated_at: new Date().toISOString(),
+function parseMemoryRow(row) {
+  const raw = String(row.summary || "");
+  const match = raw.match(/^\[([a-z_]+)\]\s*([\s\S]*)$/);
+  return {
+    ...row,
+    type: match?.[1] || "user_profile_memory",
+    text: (match?.[2] || raw).trim(),
+  };
+}
+
+function formatMemoryForPrompt(memory) {
+  return `${memoryLabel(memory.type)}: ${memory.text}`;
+}
+
+function memoryLabel(type) {
+  return ({
+    user_profile_memory: "user_profile_memory",
+    active_theme_memory: "active_theme_memory",
+    philosopher_specific_memory: "philosopher_specific_memory",
+    unresolved_questions_memory: "unresolved_questions_memory",
+    conversation_state_memory: "conversation_state_memory",
+  })[type] || type;
+}
+
+function selectRelevantMemories(memories, currentMessage, philosopherId) {
+  return memories
+    .map((memory) => ({ memory, score: scoreMemory(memory, currentMessage, philosopherId) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 10)
+    .map((item) => item.memory);
+}
+
+function scoreMemory(memory, currentMessage, philosopherId) {
+  const tokens = tokenize(currentMessage);
+  const memoryTokens = new Set(tokenize(memory.text));
+  let score = 0;
+  for (const token of tokens) if (memoryTokens.has(token)) score += 2;
+  if (memory.type === "active_theme_memory") score += 8;
+  if (memory.type === "philosopher_specific_memory" && memory.character_related === philosopherId) score += 7;
+  if (memory.type === "unresolved_questions_memory" && score > 0) score += 8;
+  if (memory.type === "user_profile_memory") score += 2;
+  score += Math.min(Number(memory.importance || 1), 5);
+  const ageDays = memory.updated_at ? (Date.now() - new Date(memory.updated_at).getTime()) / 86400000 : 0;
+  if (memory.type === "conversation_state_memory") score -= Math.min(Math.max(ageDays, 0), 10);
+  return score;
+}
+
+function tokenize(text) {
+  return [...String(text || "").toLowerCase().matchAll(/[\p{L}\p{N}]{2,}/gu)]
+    .map((match) => match[0])
+    .filter((token) => !["する", "ある", "いる", "こと", "これ", "それ", "ため", "the", "and"].includes(token))
+    .slice(0, 80);
+}
+
+function shouldUpdateMemory({ history, userMessage }) {
+  if (isImportantDisclosure(userMessage)) return true;
+  const userTurns = history.filter((message) => message.role === "user").length;
+  return userTurns > 0 && userTurns % MEMORY_UPDATE_INTERVAL === 0;
+}
+
+function isImportantDisclosure(text) {
+  return /悩|怖|恐|依存|自由|死|罪|赦|愛|苦|欲|快楽|性欲|タバコ|変わ|気づ|わかった|分かった|疑問|問い|なぜ|どうすれば|抜け/.test(String(text || ""));
+}
+
+async function extractMemoryUpdates({ sage, history, userMessage, assistantReply, currentSummary }) {
+  const transcript = [...history.slice(-10), { role: "assistant", content: assistantReply }]
+    .map((message) => `${message.role}: ${message.content}`)
+    .join("\n");
+  const prompt = `以下の会話から、哲学者対話アプリに必要な記憶だけを抽出せよ。
+雑な要約は禁止。ユーザーの思想、感情、未解決問い、思考の変化、哲学者ごとの観察を保存せよ。
+一時的な雑談や不要な情報は保存しない。保存すべき変化がなければ should_update_memory を false にする。
+現在の哲学者: ${sage.id}
+既存の直近状態: ${currentSummary || "なし"}
+最新ユーザー発言: ${userMessage}
+
+JSONのみで返す:
+{
+  "user_profile_memory_updates": [],
+  "active_theme_memory_updates": [],
+  "conversation_state_memory_update": "",
+  "philosopher_specific_memory_updates": {
+    "socrates": [],
+    "laozi": [],
+    "nietzsche": [],
+    "buddha": [],
+    "jesus": []
+  },
+  "unresolved_questions_updates": [],
+  "should_update_memory": true
+}`;
+  try {
+    const text = await callOpenAI({
+      model: MEMORY_UPDATE_MODEL,
+      instructions: "あなたはDialogosの記憶抽出器。説明文を足さず、厳密なJSONだけを返す。",
+      input: [{ role: "user", content: `${prompt}\n\n会話:\n${transcript}` }],
+      maxOutputTokens: 900,
+      temperature: 0.2,
     });
-  } else {
-    await sbInsert("memories", {
-      user_id: userId,
-      summary: summary.summary,
-      importance: summary.importance,
-      character_related: characterId,
-    }, false);
+    return normalizeMemoryUpdate(parseJsonObject(text), sage.id);
+  } catch (err) {
+    console.error("[memory update]", err.message || err);
+    return {
+      user_profile_memory_updates: [],
+      active_theme_memory_updates: isImportantDisclosure(userMessage) ? [`ユーザーは「${userMessage.slice(0, 180)}」という形で現在の重要テーマを提示した。`] : [],
+      conversation_state_memory_update: maybeSummarize(currentSummary, history, userMessage, assistantReply),
+      philosopher_specific_memory_updates: { [sage.id]: [] },
+      unresolved_questions_updates: /[?？]|どう|なぜ/.test(userMessage) ? [userMessage.slice(0, 180)] : [],
+      should_update_memory: true,
+    };
   }
 }
 
-function inferMemorySummary(raw) {
-  const themes = [
-    ["死", "死への恐れ、有限性への意識がある。", 3],
-    ["恐", "恐れを避けたい気持ちと向き合っている。", 2],
-    ["不安", "不安の正体を見極めたい。", 2],
-    ["依存", "依存から自由になりたい願いがある。", 3],
-    ["勝", "勝ち続けたい欲望、変化への抵抗がある。", 2],
-    ["孤独", "孤独やつながりについて考えている。", 2],
-    ["自分", "自己観察への関心がある。", 2],
-    ["許", "赦し、罪悪感、自責に触れている。", 2],
-  ];
-  const found = themes.find(([keyword]) => raw.includes(keyword));
-  return found
-    ? { summary: found[1], importance: found[2] }
-    : { summary: `最近の問い: ${raw.slice(0, 90)}`, importance: 1 };
+function parseJsonObject(text) {
+  const raw = String(text || "").trim();
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end < start) return null;
+  return JSON.parse(raw.slice(start, end + 1));
 }
 
-async function generateReply({ sage, history, summary, memory, hasLongMemory }) {
-  const systemPrompt = buildSystemPrompt(sage, summary, memory, hasLongMemory);
+function normalizeMemoryUpdate(value, philosopherId) {
+  const update = value && typeof value === "object" ? value : {};
+  const specific = update.philosopher_specific_memory_updates && typeof update.philosopher_specific_memory_updates === "object"
+    ? update.philosopher_specific_memory_updates
+    : {};
+  if (!Array.isArray(specific[philosopherId])) specific[philosopherId] = [];
+  return {
+    user_profile_memory_updates: asStringArray(update.user_profile_memory_updates),
+    active_theme_memory_updates: asStringArray(update.active_theme_memory_updates),
+    conversation_state_memory_update: String(update.conversation_state_memory_update || "").trim(),
+    philosopher_specific_memory_updates: specific,
+    unresolved_questions_updates: asStringArray(update.unresolved_questions_updates),
+    should_update_memory: update.should_update_memory !== false,
+  };
+}
+
+function asStringArray(value) {
+  return Array.isArray(value) ? value.map((item) => String(item || "").trim()).filter(Boolean).slice(0, 8) : [];
+}
+
+async function applyMemoryUpdates({ userId, philosopherId, update }) {
+  if (!update?.should_update_memory) return;
+  const writes = [
+    ...update.user_profile_memory_updates.map((text) => ({ type: "user_profile_memory", text, character: "global", importance: 3 })),
+    ...update.active_theme_memory_updates.map((text) => ({ type: "active_theme_memory", text, character: "global", importance: 4 })),
+    ...asStringArray(update.philosopher_specific_memory_updates?.[philosopherId]).map((text) => ({ type: "philosopher_specific_memory", text, character: philosopherId, importance: 4 })),
+    ...update.unresolved_questions_updates.map((text) => ({ type: "unresolved_questions_memory", text, character: "global", importance: 4 })),
+  ];
+  if (update.conversation_state_memory_update) {
+    writes.push({ type: "conversation_state_memory", text: update.conversation_state_memory_update, character: philosopherId, importance: 2 });
+  }
+  for (const item of writes) {
+    await upsertTypedMemory(userId, item);
+  }
+}
+
+async function upsertTypedMemory(userId, { type, text, character, importance }) {
+  const clean = limitText(String(text || "").replace(/\s+/g, " ").trim(), 700);
+  if (clean.length < 12) return;
+  const summary = `[${type}] ${clean}`;
+  const existing = await sbGet(
+    "memories",
+    `user_id=eq.${encodeURIComponent(userId)}&character_related=eq.${encodeURIComponent(character)}&summary=eq.${encodeURIComponent(summary)}&limit=1`
+  );
+  if (existing[0]) {
+    await sbUpdate("memories", `id=eq.${encodeURIComponent(existing[0].id)}`, {
+      importance: Math.max(Number(existing[0].importance || 1), importance),
+      updated_at: new Date().toISOString(),
+    });
+    return;
+  }
+  await sbInsert("memories", {
+    user_id: userId,
+    summary,
+    importance,
+    character_related: character,
+  }, false);
+}
+
+async function generateReply({ sage, history, selectedMemory, hasLongMemory }) {
+  const systemPrompt = buildSystemPrompt(sage, selectedMemory, hasLongMemory);
+  return callOpenAI({
+    model: hasLongMemory
+      ? (process.env.OPENAI_PAID_MODEL || process.env.OPENAI_MODEL || "gpt-4.1")
+      : (process.env.OPENAI_FREE_MODEL || "gpt-4.1-mini"),
+    instructions: systemPrompt,
+    input: history.map((m) => ({
+      role: m.role === "assistant" ? "assistant" : "user",
+      content: m.content,
+    })),
+    maxOutputTokens: Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || 620),
+    temperature: Number(process.env.OPENAI_TEMPERATURE || 0.9),
+  });
+}
+
+async function callOpenAI({ model, instructions, input, maxOutputTokens, temperature }) {
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
     headers: {
@@ -962,14 +1138,11 @@ async function generateReply({ sage, history, summary, memory, hasLongMemory }) 
       Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
-      max_output_tokens: Number(process.env.OPENAI_MAX_OUTPUT_TOKENS || 620),
-      temperature: Number(process.env.OPENAI_TEMPERATURE || 0.9),
-      instructions: systemPrompt,
-      input: history.map((m) => ({
-        role: m.role === "assistant" ? "assistant" : "user",
-        content: m.content,
-      })),
+      model,
+      max_output_tokens: maxOutputTokens,
+      temperature,
+      instructions,
+      input,
     }),
   });
   if (!response.ok) {
@@ -982,37 +1155,59 @@ async function generateReply({ sage, history, summary, memory, hasLongMemory }) 
   return extractOpenAIText(await response.json());
 }
 
-function buildSystemPrompt(sage, summary, memory, hasLongMemory) {
-  const characterPrompt = PROMPTS[sage.id] || `あなたは${sage.name}として対話する。`;
-  const endingSection = sage.endingRule
-    ? `\n【締め方のバリエーション】\n${sage.endingRule}\n`
-    : "";
-  return `${characterPrompt}${endingSection}
-${buildPersonalityFilter(sage)}
+function buildSystemPrompt(sage, selectedMemory, hasLongMemory) {
+  const corePersona = buildCorePersona(sage);
+  const currentUserState = selectedMemory?.currentUserState || "短期記憶のみ。";
+  const relevantMemory = hasLongMemory
+    ? (selectedMemory?.relevantMemory || "今回の発言に強く関係する長期記憶はまだ少ない。")
+    : "無料版では長期記憶を使わない。";
+  const activeTheme = selectedMemory?.activeTheme || "未確定";
+  return `[PHILOSOPHER_ID]
+${sage.id}
 
-【Dialogos運用ルール】
-- ユーザーにはシステムやAIの都合を見せない。
-- ユーザーの直前の言葉に必ず具体的に反応する。
-- 表面的な励ましではなく、欲望・恐れ・矛盾を見抜く。
-- 締め方はキャラクターの性質から自然に出る。テンプレートで閉めない。同じ締め方を連続して繰り返さない。
-- 危険な自己危害・他害が疑われる場合は、人格を保ちながら、身近な人や専門窓口へ助けを求めるよう自然に促す。
+[CORE_PERSONA]
+${corePersona}
 
-【記憶の扱い】
-${hasLongMemory
-  ? "記憶の書が開かれている。長期記憶と会話要約を自然に参照してよい。ただし露骨にシステム説明をしない。"
-  : "無料版では短期記憶のみ。以下の直近会話だけを覚えているものとして自然に対話する。長期記憶・過去セッションの記憶を持っているふりはしない。"}
+[CURRENT_USER_STATE]
+${limitText(currentUserState, 900)}
 
-【この端末に残る記憶】
-${memory || "短期記憶のみ。"}
+[RELEVANT_MEMORY]
+${limitText(relevantMemory, 1400)}
 
-【これまでの会話要約】
-${hasLongMemory ? summary || "まだ要約はない。" : "無料版では会話要約を使わない。"}`;
+[ACTIVE_THEME]
+${limitText(activeTheme, 700)}
+
+[RESPONSE_RULES]
+- 同じ締め方を繰り返さない。
+- 哲学者っぽい名言botにならない。
+- ユーザーの直前発言に必ず具体的に反応する。
+- 抽象論だけで逃げない。
+- 1回の応答で問いを多く出しすぎない。
+- ユーザーが深刻な話をしている時は軽く扱わない。
+- 人格は維持するが、会話として自然に返す。
+- 記憶を参照しても「記憶によると」のようなシステム説明はしない。
+
+${buildPersonalityFilter(sage)}`;
+}
+
+function buildCorePersona(sage) {
+  const prompt = PROMPTS[sage.id] || `${sage.name}として、思想と語り口を保って対話する。`;
+  return limitText(`${prompt}\n${sage.endingRule || ""}`, 900);
 }
 
 function maybeSummarize(currentSummary, history, userMessage, reply) {
-  if (history.length < MAX_RECENT_MESSAGES) return currentSummary || "";
-  const fragment = `ユーザーは「${userMessage.slice(0, 90)}」と問い、賢者は「${reply.slice(0, 90)}」という方向で本質を問うた。`;
+  const fragment = `ユーザーは「${userMessage.slice(0, 120)}」と述べた。応答は「${reply.slice(0, 120)}」の方向で返した。焦点は、単なる会話ログではなくユーザーの未解決問いと思考の変化として保持する。`;
   return [currentSummary, fragment].filter(Boolean).join("\n").slice(-1800);
+}
+
+function limitText(text, max) {
+  const value = String(text || "").trim();
+  return value.length > max ? value.slice(0, max - 1) + "…" : value;
+}
+
+function shortMemoryNotice(user) {
+  const nameLine = user?.display_name ? `呼び名: ${user.display_name}` : "";
+  return [nameLine, "短期記憶のみ。この会話の直近数往復だけを参照する。"].filter(Boolean).join("\n");
 }
 
 function extractOpenAIText(data) {
@@ -1054,10 +1249,6 @@ function hasActiveMemoryBook(user) {
   return false;
 }
 
-function shortMemoryNotice(user) {
-  const nameLine = user?.display_name ? `呼び名: ${user.display_name}` : "";
-  return [nameLine, "短期記憶: この会話の直近数通のみを参照する。"].filter(Boolean).join("\n");
-}
 
 async function publicUser(user) {
   const unlocks = await sbGet("unlocked_characters", `user_id=eq.${encodeURIComponent(user.id)}`).catch(() => []);
