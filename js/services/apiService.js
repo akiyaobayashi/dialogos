@@ -89,4 +89,11 @@ export const apiService = {
   restoreSubscription() {
     return request("/api/me/restore-subscription", { method: "POST" });
   },
+
+  restoreByEmail(email) {
+    return request("/api/me/restore-by-email", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  },
 };

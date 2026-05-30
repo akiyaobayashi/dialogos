@@ -698,12 +698,18 @@ function renderSubStatus(sub) {
         </p>
         <div class="sub-actions">
           <button class="primary-button" data-route="purchase">記憶の書を開く</button>
-          <button class="secondary-button" id="restoreSubBtn" style="margin-top:8px;width:100%">購入済みの方：ここを押して反映する</button>
+          <button class="secondary-button" id="restoreSubBtn" style="margin-top:8px;width:100%">購入済みの方：自動で同期する</button>
+        </div>
+        <div id="restoreEmailSection" style="display:none;margin-top:12px">
+          <p style="color:rgba(245,234,214,0.7);font-size:13px;margin:0 0 6px">自動で見つからない場合はStripeの受領メールに記載のアドレスを入力してください</p>
+          <input id="restoreEmailInput" type="email" placeholder="購入時のメールアドレス" style="width:100%;box-sizing:border-box;padding:8px 10px;border-radius:6px;border:1px solid rgba(245,234,214,0.3);background:rgba(0,0,0,0.3);color:#f5ead6;font-size:14px">
+          <button class="secondary-button" id="restoreByEmailBtn" style="margin-top:6px;width:100%">このメールアドレスで同期する</button>
         </div>
         <p id="restoreSubError" style="color:#e08080;font-size:13px;margin:8px 0 0;min-height:1em"></p>
       </div>
     `;
     document.getElementById("restoreSubBtn")?.addEventListener("click", handleRestoreSubscription);
+    document.getElementById("restoreByEmailBtn")?.addEventListener("click", handleRestoreByEmail);
   }
 }
 
@@ -723,7 +729,9 @@ async function handleRestoreSubscription() {
   } catch (err) {
     let msg;
     if (err.code === "NO_PAYMENT") {
-      msg = "自動取得できませんでした。Stripeの受領メールに記載の「cs_live_...」から始まるIDをコピーして開発者にお伝えください。";
+      msg = "自動で見つかりませんでした。下のメールアドレス欄から同期できます。";
+      const emailSection = document.getElementById("restoreEmailSection");
+      if (emailSection) emailSection.style.display = "block";
     } else if (err.code === "STRIPE_NOT_CONFIGURED") {
       msg = "Stripe設定に問題があります。";
     } else {
@@ -731,6 +739,30 @@ async function handleRestoreSubscription() {
     }
     if (errEl) errEl.textContent = msg;
     if (btn) { btn.textContent = "もう一度試す"; btn.disabled = false; }
+  }
+}
+
+async function handleRestoreByEmail() {
+  const emailInput = document.getElementById("restoreEmailInput");
+  const btn = document.getElementById("restoreByEmailBtn");
+  const errEl = document.getElementById("restoreSubError");
+  const email = emailInput?.value.trim();
+  if (!email) { if (errEl) errEl.textContent = "メールアドレスを入力してください。"; return; }
+  if (btn) { btn.textContent = "確認中…"; btn.disabled = true; }
+  if (errEl) { errEl.textContent = ""; errEl.style.color = "#e08080"; }
+  try {
+    const user = await apiService.restoreByEmail(email);
+    state.user = user;
+    updateMeter(state.user);
+    await refreshUser();
+    if (errEl) { errEl.style.color = "#7ecfa0"; errEl.textContent = "反映されました。"; }
+    setTimeout(() => renderSubscription(), 800);
+  } catch (err) {
+    const msg = err.code === "NO_CUSTOMER" || err.code === "NO_ACTIVE_SUB"
+      ? err.message
+      : `エラー（${err.code || "UNKNOWN"}）。しばらく待ってから再試行してください。`;
+    if (errEl) errEl.textContent = msg;
+    if (btn) { btn.textContent = "このメールアドレスで同期する"; btn.disabled = false; }
   }
 }
 

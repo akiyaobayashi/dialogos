@@ -150,6 +150,46 @@ app.post("/me/sync-session", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// メールアドレスから購入を復元（最終手段・確実）
+app.post("/me/restore-by-email", async (req, res, next) => {
+  try {
+    if (!stripe) return res.status(503).json({ code: "STRIPE_NOT_CONFIGURED", message: "Stripe が設定されていません。" });
+    const email = String(req.body.email || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ code: "INVALID_EMAIL", message: "有効なメールアドレスを入力してください。" });
+    }
+
+    const customers = await stripe.customers.list({ email, limit: 5 });
+    if (!customers.data.length) {
+      return res.status(404).json({ code: "NO_CUSTOMER", message: "そのメールアドレスでの購入履歴が見つかりません。Stripeの受領メールに記載のアドレスを入力してください。" });
+    }
+
+    let activeSub = null;
+    for (const customer of customers.data) {
+      const subs = await stripe.subscriptions.list({ customer: customer.id, status: "active", limit: 5 });
+      if (subs.data.length) { activeSub = subs.data[0]; break; }
+    }
+    if (!activeSub) {
+      // activeがなければtrialing/past_dueも探す
+      for (const customer of customers.data) {
+        const subs = await stripe.subscriptions.list({ customer: customer.id, limit: 5 });
+        activeSub = subs.data.find((s) => ["trialing", "past_due"].includes(s.status));
+        if (activeSub) break;
+      }
+    }
+    if (!activeSub) {
+      return res.status(404).json({ code: "NO_ACTIVE_SUB", message: "そのメールアドレスに有効なサブスクリプションが見つかりません。" });
+    }
+
+    const user = await getOrCreateUser(req.guestId);
+    await applySubscriptionDirectly(activeSub, req.guestId, user);
+    await sbUpdate("users", `id=eq.${encodeURIComponent(user.id)}`, { email });
+
+    const updated = await getUserById(user.id);
+    res.json(await publicUser(updated));
+  } catch (err) { next(err); }
+});
+
 // 購入済みリカバリー（複数戦略で逆引き）
 app.post("/me/restore-subscription", async (req, res, next) => {
   try {
@@ -395,7 +435,7 @@ app.get("/subscription", async (req, res, next) => {
         }
       }
 
-      // 手段3: guest_id メタデータでサブスクを検索（customer_id 不要）
+      // 手段3: guest_id メタデータでサブスクを検索
       if (!stripeSub) {
         try {
           const results = await stripe.subscriptions.search({
@@ -407,6 +447,22 @@ app.get("/subscription", async (req, res, next) => {
           ) || results.data[0] || null;
         } catch (e) {
           console.error("[subscription] search by guest_id failed:", e.message);
+        }
+      }
+
+      // 手段4: DBのemailでStripe顧客を特定
+      if (!stripeSub && req.user.email) {
+        try {
+          const customers = await stripe.customers.list({ email: req.user.email, limit: 3 });
+          for (const customer of customers.data) {
+            const subs = await stripe.subscriptions.list({ customer: customer.id, limit: 5 });
+            const found = subs.data.find((s) =>
+              ["active", "trialing", "past_due"].includes(s.status)
+            );
+            if (found) { stripeSub = found; break; }
+          }
+        } catch (e) {
+          console.error("[subscription] lookup by email failed:", e.message);
         }
       }
     }
