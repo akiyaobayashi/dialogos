@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>賢者たちとの対話 — Dialogos</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=IM+Fell+English:ital@0;1&family=Noto+Serif+JP:wght@300;400;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="./css/style.css">
+  </head>
+  <body>
+    <div class="ornament-strip" aria-hidden="true"></div>
+    <div class="app-shell">
+      <header class="app-header">
+        <button class="brand" data-route="list" aria-label="賢者一覧へ">
+          <svg class="brand-sigil" viewBox="0 0 46 46" width="46" height="46" aria-hidden="true">
+            <defs>
+              <radialGradient id="sigilBg" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="rgba(212,168,67,0.12)"/>
+                <stop offset="100%" stop-color="rgba(212,168,67,0)"/>
+              </radialGradient>
+            </defs>
+            <circle cx="23" cy="23" r="21.5" fill="url(#sigilBg)"/>
+            <circle cx="23" cy="23" r="21" fill="none" stroke="rgba(212,168,67,0.45)" stroke-width="0.75"/>
+            <circle cx="23" cy="23" r="9" fill="none" stroke="rgba(212,168,67,0.22)" stroke-width="0.5"/>
+            <polygon points="23,7.5 36,31 10,31" fill="rgba(212,168,67,0.05)" stroke="rgba(212,168,67,0.88)" stroke-width="0.95" stroke-linejoin="round"/>
+            <polygon points="36,15 23,38.5 10,15" fill="rgba(212,168,67,0.05)" stroke="rgba(212,168,67,0.88)" stroke-width="0.95" stroke-linejoin="round"/>
+            <circle cx="23" cy="23" r="1.6" fill="rgba(212,168,67,0.92)"/>
+          </svg>
+          <span class="brand-text">
+            <strong>Dialogos</strong>
+            <small>賢者たちとの対話</small>
+          </span>
+        </button>
+        <nav class="nav-actions" aria-label="メニュー">
+          <button data-route="list">賢者一覧</button>
+          <button data-route="history">履歴</button>
+          <button data-route="subscription" class="nav-sub-btn" id="subNavBtn">記憶の書</button>
+          <button data-route="purchase" class="nav-purchase-btn">灯火を継ぐ</button>
+          <span class="meter" id="usageMeter" title="灯火の残量" hidden>
+            <span class="meter-inner"></span>
+          </span>
+        </nav>
+      </header>
+      <main id="app" class="view-root" aria-live="polite"></main>
+    </div>
+    <div class="ornament-strip" aria-hidden="true"></div>
+
+    <!-- 決済成功バナー（JS で表示制御） -->
+    <div id="successBanner" class="success-banner" hidden>
+      <span>✦</span>
+      <p>灯火を受け取りました。賢者との対話を続けてください。</p>
+      <button id="successBannerClose" aria-label="閉じる">✕</button>
+    </div>
+    <footer class="legal-footer">
+      <div class="legal-footer-inner">
+        <a href="./terms.html">利用規約</a>
+        <a href="./privacy.html">プライバシーポリシー</a>
+        <a href="./legal.html">特定商取引法</a>
+      </div>
+      <p>Dialogos · 賢者たちとの対話</p>
+    </footer>
+
+    <script type="module" src="./js/app.js"></script>
+  </body>
+</html>
