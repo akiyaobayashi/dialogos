@@ -984,15 +984,16 @@ async function generateReply({ sage, history, summary, memory, hasLongMemory }) 
 
 function buildSystemPrompt(sage, summary, memory, hasLongMemory) {
   const characterPrompt = PROMPTS[sage.id] || `あなたは${sage.name}として対話する。`;
-  return `${characterPrompt}
-
+  const endingSection = sage.endingRule
+    ? `\n【締め方のバリエーション】\n${sage.endingRule}\n`
+    : "";
+  return `${characterPrompt}${endingSection}
 ${buildPersonalityFilter(sage)}
 
 【Dialogos運用ルール】
 - ユーザーにはシステムやAIの都合を見せない。
 - ユーザーの直前の言葉に必ず具体的に反応する。
 - 表面的な励ましではなく、欲望・恐れ・矛盾を見抜く。
-- 返答は基本200〜350字。
 - 締め方はキャラクターの性質から自然に出る。テンプレートで閉めない。同じ締め方を連続して繰り返さない。
 - 危険な自己危害・他害が疑われる場合は、人格を保ちながら、身近な人や専門窓口へ助けを求めるよう自然に促す。
 
