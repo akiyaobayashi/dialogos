@@ -24,9 +24,19 @@ async function boot() {
 
   const params = new URLSearchParams(window.location.search);
   if (params.get("payment") === "success") {
+    const sessionId = params.get("session_id");
     history.replaceState({}, "", window.location.pathname);
-    showSuccessBanner();
+    if (sessionId) {
+      try {
+        const user = await apiService.syncSession(sessionId);
+        state.user = user;
+        updateMeter(state.user);
+      } catch (_) {
+        // webhookが先に処理済みの場合など。通常のrefreshにフォールバック
+      }
+    }
     await refreshUser();
+    showSuccessBanner();
   } else if (params.get("route")) {
     state.route = params.get("route");
     history.replaceState({}, "", window.location.pathname);

@@ -122,8 +122,31 @@ app.use(async (req, res, next) => {
   }
 });
 
-app.get("/me", (req, res) => {
-  res.json(publicUser(req.user));
+app.get("/me", async (req, res, next) => {
+  try {
+    res.json(await publicUser(req.user));
+  } catch (err) { next(err); }
+});
+
+// 支払い成功後のリカバリー：webhookが失敗してもここで確実に反映する
+app.post("/me/sync-session", async (req, res, next) => {
+  try {
+    if (!stripe) return res.status(503).json({ code: "STRIPE_NOT_CONFIGURED", message: "Stripe が設定されていません。" });
+    const sessionId = String(req.body.sessionId || "");
+    if (!sessionId.startsWith("cs_")) return res.status(400).json({ code: "INVALID_SESSION", message: "無効なセッションIDです。" });
+
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    if (session.payment_status !== "paid" && session.status !== "complete") {
+      return res.status(400).json({ code: "NOT_PAID", message: "支払いが完了していません。" });
+    }
+    if (session.metadata?.guest_id !== req.guestId) {
+      return res.status(403).json({ code: "FORBIDDEN", message: "このセッションはこの端末のものではありません。" });
+    }
+
+    await handleCheckoutCompleted(session);
+    const user = await getUserById(req.user.id);
+    res.json(await publicUser(user));
+  } catch (err) { next(err); }
 });
 
 app.post("/me/name", async (req, res, next) => {
@@ -131,7 +154,7 @@ app.post("/me/name", async (req, res, next) => {
     const displayName = String(req.body.displayName || "").trim().slice(0, 40);
     if (!displayName) return res.status(400).json({ code: "EMPTY_NAME", message: "呼び名を入力してください。" });
     const [user] = await sbUpdate("users", `id=eq.${encodeURIComponent(req.user.id)}`, { display_name: displayName });
-    res.json(publicUser(user || { ...req.user, display_name: displayName }));
+    res.json(await publicUser(user || { ...req.user, display_name: displayName }));
   } catch (err) {
     next(err);
   }
@@ -311,7 +334,7 @@ app.post("/chat", async (req, res, next) => {
     if (hasLongMemory) await updateLongTermMemory(req.user.id, sage.id, message);
 
     const user = await getUserById(req.user.id);
-    res.json({ conversationId: conversation.id, reply, user: publicUser(user) });
+    res.json({ conversationId: conversation.id, reply, user: await publicUser(user) });
   } catch (err) {
     next(err);
   }
@@ -329,7 +352,16 @@ async function handleCheckoutCompleted(session) {
   const guestId = session.metadata?.guest_id;
   const pkg = PACKAGES.find((item) => item.id === session.metadata?.packageId);
   const credits = Number(session.metadata?.credits || pkg?.credits || 0);
-  if (!guestId || !pkg || !credits) return;
+  if (!guestId || !pkg || !credits) {
+    console.error("[webhook] handleCheckoutCompleted: 処理に必要なデータが不足", {
+      sessionId: session.id,
+      guestId,
+      packageId: session.metadata?.packageId,
+      credits,
+      metadata: session.metadata,
+    });
+    return;
+  }
 
   const existing = await sbGet("purchases", `stripe_session_id=eq.${encodeURIComponent(session.id)}&limit=1`);
   if (existing.length) return;
@@ -592,14 +624,15 @@ function shortMemoryNotice(user) {
   return [nameLine, "短期記憶: この会話の直近数通のみを参照する。"].filter(Boolean).join("\n");
 }
 
-function publicUser(user) {
+async function publicUser(user) {
+  const unlocks = await sbGet("unlocked_characters", `user_id=eq.${encodeURIComponent(user.id)}`).catch(() => []);
   return {
     id: user.id,
     guest_id: user.guest_id,
     display_name: user.display_name || "",
     free_count: Number(user.free_count || 0),
     credits: Number(user.credits || 0),
-    unlocked_characters: [],
+    unlocked_characters: unlocks.map((r) => r.character_id),
     subscription_status: user.subscription_status || null,
     subscription_plan: user.subscription_plan || null,
     subscription_current_period_end: user.subscription_current_period_end || null,

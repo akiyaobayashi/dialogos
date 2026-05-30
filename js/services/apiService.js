@@ -78,4 +78,11 @@ export const apiService = {
   cancelSubscription() {
     return request("/api/stripe/cancel", { method: "POST" });
   },
+
+  syncSession(sessionId) {
+    return request("/api/me/sync-session", {
+      method: "POST",
+      body: JSON.stringify({ sessionId }),
+    });
+  },
 };
