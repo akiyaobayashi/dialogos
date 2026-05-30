@@ -128,6 +128,53 @@ app.get("/me", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+app.get("/me/debug", async (req, res, next) => {
+  try {
+    const u = req.user;
+    const result = {
+      db: {
+        subscription_status: u.subscription_status,
+        subscription_id: u.subscription_id,
+        stripe_customer_id: u.stripe_customer_id,
+        subscription_current_period_end: u.subscription_current_period_end,
+        email: u.email,
+        guest_id: u.guest_id,
+      },
+      stripe: {},
+    };
+
+    if (!stripe) { result.stripe.error = "Stripe not configured"; return res.json(result); }
+
+    if (u.subscription_id) {
+      try {
+        const sub = await stripe.subscriptions.retrieve(u.subscription_id);
+        result.stripe.by_subscription_id = { found: true, status: sub.status, current_period_end: sub.current_period_end };
+      } catch (e) { result.stripe.by_subscription_id = { found: false, error: e.message }; }
+    } else { result.stripe.by_subscription_id = "no subscription_id in DB"; }
+
+    if (u.stripe_customer_id) {
+      try {
+        const list = await stripe.subscriptions.list({ customer: u.stripe_customer_id, limit: 5 });
+        result.stripe.by_customer_id = { found: list.data.length > 0, count: list.data.length, statuses: list.data.map(s => s.status) };
+      } catch (e) { result.stripe.by_customer_id = { found: false, error: e.message }; }
+    } else { result.stripe.by_customer_id = "no stripe_customer_id in DB"; }
+
+    try {
+      const search = await stripe.subscriptions.search({ query: `metadata['guest_id']:'${req.guestId}'`, limit: 5 });
+      result.stripe.by_guest_id_search = { found: search.data.length > 0, count: search.data.length, statuses: search.data.map(s => s.status) };
+    } catch (e) { result.stripe.by_guest_id_search = { found: false, error: e.message }; }
+
+    if (u.email) {
+      try {
+        const customers = await stripe.customers.list({ email: u.email, limit: 3 });
+        result.stripe.by_email = { customers_found: customers.data.length };
+      } catch (e) { result.stripe.by_email = { error: e.message }; }
+    } else { result.stripe.by_email = "no email in DB"; }
+
+    res.json(result);
+  } catch (err) { next(err); }
+});
+
 // 支払い成功後のリカバリー（session_id 指定）
 app.post("/me/sync-session", async (req, res, next) => {
   try {
