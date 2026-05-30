@@ -371,7 +371,7 @@ app.get("/subscription", async (req, res, next) => {
     let stripeSub = null;
 
     if (stripe) {
-      // 手段1: subscription_id で直接取得
+      // 手段1: subscription_id で直接取得（最速）
       if (req.user.subscription_id) {
         try {
           stripeSub = await stripe.subscriptions.retrieve(req.user.subscription_id);
@@ -379,7 +379,8 @@ app.get("/subscription", async (req, res, next) => {
           console.error("[subscription] retrieve by id failed:", e.message);
         }
       }
-      // 手段2: subscription_id がなければ stripe_customer_id からリスト取得
+
+      // 手段2: stripe_customer_id から全サブスク取得
       if (!stripeSub && req.user.stripe_customer_id) {
         try {
           const list = await stripe.subscriptions.list({
@@ -393,27 +394,54 @@ app.get("/subscription", async (req, res, next) => {
           console.error("[subscription] list by customer failed:", e.message);
         }
       }
+
+      // 手段3: guest_id メタデータでサブスクを検索（customer_id 不要）
+      if (!stripeSub) {
+        try {
+          const results = await stripe.subscriptions.search({
+            query: `metadata['guest_id']:'${req.guestId}'`,
+            limit: 5,
+          });
+          stripeSub = results.data.find((s) =>
+            ["active", "trialing"].includes(s.status)
+          ) || results.data[0] || null;
+        } catch (e) {
+          console.error("[subscription] search by guest_id failed:", e.message);
+        }
+      }
     }
 
     if (stripeSub) {
       const pkg = PACKAGES.find((p) => p.stripe_price_id === stripeSub.items?.data?.[0]?.price?.id);
+      const customerId = typeof stripeSub.customer === "string"
+        ? stripeSub.customer
+        : req.user.stripe_customer_id || null;
+
+      // DB を完全同期（subscription_id・customer_id が未設定でも修復される）
       await sbUpdate("users", `id=eq.${encodeURIComponent(req.user.id)}`, {
         subscription_id: stripeSub.id,
         subscription_status: stripeSub.status,
         subscription_plan: pkg?.id || req.user.subscription_plan || null,
         subscription_current_period_end: toIsoFromUnix(stripeSub.current_period_end),
         subscription_cancel_at_period_end: !!stripeSub.cancel_at_period_end,
+        stripe_customer_id: customerId,
       });
+
+      // アクティブなら文字解放も確実に適用
+      if (["active", "trialing"].includes(stripeSub.status)) {
+        await unlockAllCharacters(req.user.id);
+      }
+
       return res.json({
         status: stripeSub.status,
         plan: pkg?.id || req.user.subscription_plan || null,
         currentPeriodEnd: toIsoFromUnix(stripeSub.current_period_end),
         cancelAtPeriodEnd: !!stripeSub.cancel_at_period_end,
-        hasCustomer: !!req.user.stripe_customer_id,
+        hasCustomer: !!customerId,
       });
     }
 
-    // Stripeで見つからない場合はDBにフォールバック
+    // Stripe で見つからない場合は DB にフォールバック
     res.json({
       status: req.user.subscription_status || "none",
       plan: req.user.subscription_plan || null,
