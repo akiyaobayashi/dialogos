@@ -521,8 +521,11 @@ async function generateReply({ sage, history, summary, memory, hasLongMemory }) 
     }),
   });
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`OpenAI ${response.status}: ${text.slice(0, 200)}`);
+    const errorText = await response.text().catch(() => "");
+    const error = new Error(`OpenAI ${response.status}: ${errorText.slice(0, 500)}`);
+    error.code = "OPENAI_REQUEST_FAILED";
+    error.publicMessage = "OpenAI APIへの接続で失敗しました。APIキー、請求設定、モデル名を確認してください。";
+    throw error;
   }
   return extractOpenAIText(await response.json());
 }
@@ -632,8 +635,11 @@ async function sbRequest(table, query = "", options = {}) {
   };
   const response = await fetch(url, { ...options, headers });
   if (!response.ok) {
-    const text = await response.text().catch(() => "");
-    throw new Error(`Supabase ${response.status}: ${text.slice(0, 300)}`);
+    const errorText = await response.text().catch(() => "");
+    const error = new Error(`Supabase ${response.status}: ${errorText.slice(0, 500)}`);
+    error.code = "SUPABASE_REQUEST_FAILED";
+    error.publicMessage = "Supabaseへの保存または読み込みで失敗しました。URL、service_roleキー、テーブル作成状態を確認してください。";
+    throw error;
   }
   if (response.status === 204) return [];
   return response.json();
