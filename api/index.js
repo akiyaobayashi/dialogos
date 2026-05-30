@@ -1,6 +1,5 @@
 import express from "express";
 import Stripe from "stripe";
-import nodemailer from "nodemailer";
 import { getPhilosopherById } from "../js/data/philosophers.js";
 import { PROMPTS } from "../js/data/prompts.js";
 import { buildPersonalityFilter } from "../js/data/personalityFilters.js";
@@ -246,41 +245,49 @@ app.post("/me/sync-session", async (req, res, next) => {
 // メールアドレスから購入を復元（最終手段・確実）
 // ── メール OTP ────────────────────────────────────────────────────────────────
 
-function createMailTransporter() {
-  const pass = process.env.GMAIL_APP_PASSWORD;
-  if (!pass) return null;
-  return nodemailer.createTransport({
-    service: "gmail",
-    auth: { user: "dialogs.support@gmail.com", pass },
-  });
-}
-
 async function sendOtpEmail(email, code) {
-  const transporter = createMailTransporter();
-  if (!transporter) {
-    const err = new Error("メール送信が設定されていません。GMAIL_APP_PASSWORD を設定してください。");
+  const apiKey = process.env.RESEND_API_KEY;
+  const from   = process.env.RESEND_FROM || "Dialogos <onboarding@resend.dev>";
+
+  if (!apiKey) {
+    const err = new Error("メール送信が設定されていません。RESEND_API_KEY を設定してください。");
     err.code = "EMAIL_NOT_CONFIGURED";
     throw err;
   }
-  await transporter.sendMail({
-    from: '"Dialogos" <dialogs.support@gmail.com>',
-    to: email,
-    subject: "【Dialogos】認証コード",
-    html: `
-      <div style="font-family:Georgia,serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#1a120a;color:#f5ead6;border-radius:8px">
-        <h2 style="color:#d4a843;margin:0 0 20px;font-size:20px;letter-spacing:0.05em">Dialogos — 認証コード</h2>
-        <p style="margin:0 0 24px;line-height:1.8;color:rgba(245,234,214,0.8)">
-          以下のコードを入力して、アカウントを同期してください。
-        </p>
-        <div style="background:#2a1708;border:1px solid rgba(184,134,11,0.6);border-radius:6px;padding:24px;text-align:center;margin:0 0 24px">
-          <span style="font-size:38px;font-weight:bold;letter-spacing:0.45em;color:#d4a843">${code}</span>
-        </div>
-        <p style="margin:0;font-size:13px;color:rgba(245,234,214,0.4);line-height:1.7">
-          このコードは10分間有効です。<br>
-          お心当たりのない場合は、このメールを無視してください。
-        </p>
-      </div>`,
+
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from,
+      to: [email],
+      subject: "【Dialogos】認証コード",
+      html: `
+        <div style="font-family:Georgia,serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#1a120a;color:#f5ead6;border-radius:8px">
+          <h2 style="color:#d4a843;margin:0 0 20px;font-size:20px;letter-spacing:0.05em">Dialogos — 認証コード</h2>
+          <p style="margin:0 0 24px;line-height:1.8;color:rgba(245,234,214,0.8)">
+            以下のコードを入力して、アカウントを同期してください。
+          </p>
+          <div style="background:#2a1708;border:1px solid rgba(184,134,11,0.6);border-radius:6px;padding:24px;text-align:center;margin:0 0 24px">
+            <span style="font-size:38px;font-weight:bold;letter-spacing:0.45em;color:#d4a843">${code}</span>
+          </div>
+          <p style="margin:0;font-size:13px;color:rgba(245,234,214,0.4);line-height:1.7">
+            このコードは10分間有効です。<br>
+            お心当たりのない場合は、このメールを無視してください。
+          </p>
+        </div>`,
+    }),
   });
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    const err = new Error(body.message || "メール送信に失敗しました。");
+    err.code = "EMAIL_SEND_FAILED";
+    throw err;
+  }
 }
 
 // OTP送信
