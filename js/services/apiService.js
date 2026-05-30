@@ -96,4 +96,11 @@ export const apiService = {
       body: JSON.stringify({ email }),
     });
   },
+
+  cancelByEmail(email) {
+    return request("/api/stripe/cancel-by-email", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  },
 };

@@ -641,6 +641,55 @@ app.post("/stripe/cancel", async (req, res, next) => {
   }
 });
 
+// ログイン不要・メールアドレスだけで解約（端末紛失・別端末対応）
+app.post("/stripe/cancel-by-email", async (req, res, next) => {
+  try {
+    if (!stripe) return res.status(503).json({ code: "STRIPE_NOT_CONFIGURED", message: "Stripe が設定されていません。" });
+    const email = String(req.body.email || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ code: "INVALID_EMAIL", message: "有効なメールアドレスを入力してください。" });
+    }
+
+    const customers = await stripe.customers.list({ email, limit: 5 });
+    if (!customers.data.length) {
+      return res.status(404).json({ code: "NO_CUSTOMER", message: "そのメールアドレスでの購入履歴が見つかりません。Stripeの受領メールに記載のアドレスを確認してください。" });
+    }
+
+    let activeSub = null;
+    let foundCustomerId = null;
+    for (const customer of customers.data) {
+      const subs = await stripe.subscriptions.list({ customer: customer.id, status: "active", limit: 5 });
+      if (subs.data.length) { activeSub = subs.data[0]; foundCustomerId = customer.id; break; }
+    }
+    if (!activeSub) {
+      return res.status(404).json({ code: "NO_ACTIVE_SUB", message: "有効なサブスクリプションが見つかりません。すでに解約済みの可能性があります。" });
+    }
+
+    const cancelled = await stripe.subscriptions.update(activeSub.id, { cancel_at_period_end: true });
+    const periodEnd = subPeriodEnd(cancelled);
+    const periodEndIso = toIsoFromUnix(periodEnd);
+    const periodEndJa = periodEnd
+      ? new Date(periodEnd * 1000).toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" })
+      : null;
+
+    // DBも更新（ユーザーが見つかれば）
+    const users = await sbGet("users", `stripe_customer_id=eq.${encodeURIComponent(foundCustomerId)}&limit=1`);
+    if (users[0]) {
+      await sbUpdate("users", `id=eq.${encodeURIComponent(users[0].id)}`, {
+        subscription_cancel_at_period_end: true,
+        subscription_current_period_end: periodEndIso,
+      });
+    }
+
+    res.json({
+      ok: true,
+      message: periodEndJa
+        ? `解約手続きが完了しました。${periodEndJa}まで引き続きご利用いただけます。`
+        : "解約手続きが完了しました。",
+    });
+  } catch (err) { next(err); }
+});
+
 app.post("/chat", async (req, res, next) => {
   try {
     const philosopherId = String(req.body.philosopherId || "socrates");

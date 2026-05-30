@@ -136,6 +136,7 @@ function render() {
     history:      renderHistory,
     purchase:     renderPurchase,
     subscription: renderSubscription,
+    cancel:       renderCancel,
   }[state.route] || renderList)();
 }
 
@@ -174,7 +175,12 @@ function renderList() {
       <p class="eyebrow">14人の哲学者・宗教家</p>
       <h1>賢者を選ぶ</h1>
       <p>あなたの答えが、本当の問いを隠している。</p>
-      ${subscribed ? `<div class="hero-sub-badge">✦ 記憶の書加入中 — 全14賢者と対話可能</div>` : ""}
+      ${subscribed
+        ? `<div class="hero-sub-badge">✦ 記憶の書加入中 — 全14賢者と対話可能</div>`
+        : `<p style="margin-top:10px;font-size:12px;color:rgba(245,234,214,0.4)">
+            別の端末で購入済みの方は
+            <button data-route="subscription" style="background:none;border:none;color:rgba(212,168,67,0.7);cursor:pointer;font-size:12px;text-decoration:underline;padding:0">こちらで同期</button>
+          </p>`}
     </section>
     <section class="sage-grid">
       ${philosophers.map((sage, i) => renderSageCard(sage, i)).join("")}
@@ -645,7 +651,6 @@ async function renderSubscription() {
   try {
     let sub = await apiService.getSubscription();
 
-    // 有効なのに更新日が空の場合、自動でStripeから取得し直す
     if ((sub.status === "active" || sub.status === "trialing") && !sub.currentPeriodEnd) {
       try {
         await apiService.restoreSubscription();
@@ -654,6 +659,16 @@ async function renderSubscription() {
     }
 
     renderSubStatus(sub);
+
+    // 解約ページへのリンクを追加（端末紛失時などの案内）
+    const el = document.getElementById("subStatus");
+    if (el) {
+      const footer = document.createElement("p");
+      footer.style.cssText = "margin-top:20px;font-size:12px;color:rgba(245,234,214,0.35);text-align:center";
+      footer.innerHTML = `端末を紛失した場合や別端末からの解約は
+        <button data-route="cancel" style="background:none;border:none;color:rgba(212,168,67,0.5);cursor:pointer;font-size:12px;text-decoration:underline;padding:0">こちら</button>`;
+      el.appendChild(footer);
+    }
   } catch {
     const el = document.getElementById("subStatus");
     if (el) el.innerHTML = `<p class="sub-error">情報の取得に失敗しました。再読み込みをお試しください。</p>`;
@@ -761,6 +776,55 @@ async function handleRestoreSubscription() {
     }
     if (errEl) errEl.textContent = msg;
     if (btn) { btn.textContent = "もう一度試す"; btn.disabled = false; }
+  }
+}
+
+// ── 解約ページ（ログイン不要・別端末・端末紛失対応）────────────────────────────
+function renderCancel() {
+  app.innerHTML = `
+    <section class="sub-view scroll-panel">
+      <p class="eyebrow">解約手続き</p>
+      <h1>記憶の書を解約する</h1>
+      <p class="lead" style="color:rgba(245,234,214,0.6);font-size:14px;line-height:1.8">
+        端末を紛失した場合や別端末からでも、<br>
+        Stripeの受領メールに記載のアドレスで解約できます。
+      </p>
+      <div style="max-width:400px;margin:24px auto 0">
+        <input id="cancelEmailInput" type="email" placeholder="購入時のメールアドレス"
+          style="width:100%;box-sizing:border-box;padding:10px 12px;border-radius:8px;border:1px solid rgba(245,234,214,0.3);background:rgba(0,0,0,0.3);color:#f5ead6;font-size:15px;margin-bottom:10px">
+        <button class="secondary-button" id="cancelByEmailBtn" style="width:100%">解約手続きをする</button>
+        <p id="cancelResult" style="margin-top:12px;font-size:14px;min-height:1.4em;text-align:center"></p>
+        <p style="margin-top:20px;font-size:12px;color:rgba(245,234,214,0.35);text-align:center;line-height:1.8">
+          解約後も契約期間終了日まで引き続きご利用いただけます。<br>
+          月の途中での返金は行っておりません。
+        </p>
+      </div>
+      <div style="text-align:center;margin-top:24px">
+        <button data-route="list" style="background:none;border:none;color:rgba(245,234,214,0.35);cursor:pointer;font-size:13px">← 戻る</button>
+      </div>
+    </section>
+  `;
+  document.getElementById("cancelByEmailBtn")?.addEventListener("click", handleCancelByEmail);
+}
+
+async function handleCancelByEmail() {
+  const input = document.getElementById("cancelEmailInput");
+  const btn = document.getElementById("cancelByEmailBtn");
+  const result = document.getElementById("cancelResult");
+  const email = input?.value.trim();
+  if (!email) { result.style.color = "#e08080"; result.textContent = "メールアドレスを入力してください。"; return; }
+  btn.textContent = "確認中…"; btn.disabled = true;
+  result.textContent = "";
+  try {
+    const data = await apiService.cancelByEmail(email);
+    result.style.color = "#7ecfa0";
+    result.textContent = data.message;
+    btn.style.display = "none";
+    await refreshUser();
+  } catch (err) {
+    result.style.color = "#e08080";
+    result.textContent = err.message || "エラーが発生しました。しばらく待ってから再試行してください。";
+    btn.textContent = "解約手続きをする"; btn.disabled = false;
   }
 }
 
