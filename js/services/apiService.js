@@ -103,4 +103,18 @@ export const apiService = {
       body: JSON.stringify({ email }),
     });
   },
+
+  sendOtp(email) {
+    return request("/api/auth/otp/send", {
+      method: "POST",
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  verifyOtp(email, code) {
+    return request("/api/auth/otp/verify", {
+      method: "POST",
+      body: JSON.stringify({ email, code }),
+    });
+  },
 };

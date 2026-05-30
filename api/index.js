@@ -1,5 +1,6 @@
 import express from "express";
 import Stripe from "stripe";
+import nodemailer from "nodemailer";
 import { getPhilosopherById } from "../js/data/philosophers.js";
 import { PROMPTS } from "../js/data/prompts.js";
 import { buildPersonalityFilter } from "../js/data/personalityFilters.js";
@@ -243,6 +244,153 @@ app.post("/me/sync-session", async (req, res, next) => {
 });
 
 // メールアドレスから購入を復元（最終手段・確実）
+// ── メール OTP ────────────────────────────────────────────────────────────────
+
+function createMailTransporter() {
+  const pass = process.env.GMAIL_APP_PASSWORD;
+  if (!pass) return null;
+  return nodemailer.createTransport({
+    service: "gmail",
+    auth: { user: "dialogs.support@gmail.com", pass },
+  });
+}
+
+async function sendOtpEmail(email, code) {
+  const transporter = createMailTransporter();
+  if (!transporter) {
+    const err = new Error("メール送信が設定されていません。GMAIL_APP_PASSWORD を設定してください。");
+    err.code = "EMAIL_NOT_CONFIGURED";
+    throw err;
+  }
+  await transporter.sendMail({
+    from: '"Dialogos" <dialogs.support@gmail.com>',
+    to: email,
+    subject: "【Dialogos】認証コード",
+    html: `
+      <div style="font-family:Georgia,serif;max-width:480px;margin:0 auto;padding:32px 24px;background:#1a120a;color:#f5ead6;border-radius:8px">
+        <h2 style="color:#d4a843;margin:0 0 20px;font-size:20px;letter-spacing:0.05em">Dialogos — 認証コード</h2>
+        <p style="margin:0 0 24px;line-height:1.8;color:rgba(245,234,214,0.8)">
+          以下のコードを入力して、アカウントを同期してください。
+        </p>
+        <div style="background:#2a1708;border:1px solid rgba(184,134,11,0.6);border-radius:6px;padding:24px;text-align:center;margin:0 0 24px">
+          <span style="font-size:38px;font-weight:bold;letter-spacing:0.45em;color:#d4a843">${code}</span>
+        </div>
+        <p style="margin:0;font-size:13px;color:rgba(245,234,214,0.4);line-height:1.7">
+          このコードは10分間有効です。<br>
+          お心当たりのない場合は、このメールを無視してください。
+        </p>
+      </div>`,
+  });
+}
+
+// OTP送信
+app.post("/auth/otp/send", async (req, res, next) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    if (!email || !email.includes("@")) {
+      return res.status(400).json({ code: "INVALID_EMAIL", message: "有効なメールアドレスを入力してください。" });
+    }
+
+    // 10分で3回までのレート制限
+    const recent = await sbGet("email_otp",
+      `email=eq.${encodeURIComponent(email)}&used=eq.false&created_at=gte.${new Date(Date.now() - 600_000).toISOString()}&limit=3`
+    );
+    if (recent.length >= 3) {
+      return res.status(429).json({ code: "OTP_RATE_LIMIT", message: "短時間に多くのコードを送信しました。しばらく待ってから再試行してください。" });
+    }
+
+    const code = String(Math.floor(100000 + Math.random() * 900000));
+    const expiresAt = new Date(Date.now() + 600_000).toISOString();
+
+    await sbInsert("email_otp", { email, code, expires_at: expiresAt, used: false });
+    await sendOtpEmail(email, code);
+
+    res.json({ ok: true });
+  } catch (err) { next(err); }
+});
+
+// OTP検証・アカウント完全同期
+app.post("/auth/otp/verify", async (req, res, next) => {
+  try {
+    const email = String(req.body.email || "").trim().toLowerCase();
+    const code  = String(req.body.code  || "").replace(/\s/g, "");
+
+    if (!email || !code) {
+      return res.status(400).json({ code: "INVALID_INPUT", message: "メールアドレスとコードを入力してください。" });
+    }
+
+    // OTP検証（有効期限内かつ未使用）
+    const otps = await sbGet("email_otp",
+      `email=eq.${encodeURIComponent(email)}&code=eq.${encodeURIComponent(code)}&used=eq.false&limit=5`
+    );
+    const validOtp = otps.find((o) => new Date(o.expires_at) > new Date());
+    if (!validOtp) {
+      return res.status(400).json({ code: "INVALID_OTP", message: "コードが正しくないか、有効期限切れです。再送してください。" });
+    }
+
+    // 使用済みに更新
+    await sbUpdate("email_otp", `id=eq.${validOtp.id}`, { used: true });
+
+    // 既存アカウントを検索（DB内のemail → stripe_customer_id順）
+    let sourceUser = null;
+    const byEmail = await sbGet("users", `email=eq.${encodeURIComponent(email)}&order=created_at.asc&limit=1`);
+    if (byEmail[0]) {
+      sourceUser = byEmail[0];
+    } else if (stripe) {
+      const customers = await stripe.customers.list({ email, limit: 5 });
+      for (const customer of customers.data) {
+        const found = await sbGet("users", `stripe_customer_id=eq.${encodeURIComponent(customer.id)}&limit=1`);
+        if (found[0]) { sourceUser = found[0]; break; }
+      }
+    }
+
+    const currentUser = await getOrCreateUser(req.guestId);
+
+    if (sourceUser && sourceUser.id !== currentUser.id) {
+      // ── 既存アカウント → 現在の端末へ完全マージ ──
+      const patch = {
+        email,
+        subscription_id:                   sourceUser.subscription_id                   || null,
+        subscription_status:               sourceUser.subscription_status               || null,
+        subscription_plan:                 sourceUser.subscription_plan                 || null,
+        subscription_current_period_end:   sourceUser.subscription_current_period_end   || null,
+        subscription_cancel_at_period_end: !!sourceUser.subscription_cancel_at_period_end,
+        stripe_customer_id:                sourceUser.stripe_customer_id                || null,
+        credits:    Number(sourceUser.credits    || 0) + Number(currentUser.credits    || 0),
+        free_count: Math.max(Number(sourceUser.free_count || 0), Number(currentUser.free_count || 0)),
+        display_name: sourceUser.display_name || currentUser.display_name || null,
+      };
+      await sbUpdate("users", `id=eq.${currentUser.id}`, patch);
+
+      // 会話履歴・メモリを現在の端末ユーザーへ移行
+      await sbUpdate("conversations", `user_id=eq.${encodeURIComponent(sourceUser.id)}`, { user_id: currentUser.id }).catch(() => {});
+      await sbUpdate("memories",      `user_id=eq.${encodeURIComponent(sourceUser.id)}`, { user_id: currentUser.id }).catch(() => {});
+
+      // キャラクター解放
+      await unlockAllCharacters(currentUser.id);
+
+    } else {
+      // 既存アカウントなし → メール登録 + Stripeからサブスク適用
+      await sbUpdate("users", `id=eq.${currentUser.id}`, { email });
+      if (stripe) {
+        const nowUnix = Math.floor(Date.now() / 1000);
+        const customers = await stripe.customers.list({ email, limit: 5 });
+        for (const customer of customers.data) {
+          const subs = await stripe.subscriptions.list({ customer: customer.id, limit: 10 });
+          const validSub = subs.data.find((s) =>
+            ["active", "trialing"].includes(s.status) ||
+            (s.status === "canceled" && subPeriodEnd(s) && subPeriodEnd(s) > nowUnix)
+          );
+          if (validSub) { await applySubscriptionDirectly(validSub, req.guestId, currentUser); break; }
+        }
+      }
+    }
+
+    const updated = await getUserById(currentUser.id);
+    res.json(await publicUser(updated));
+  } catch (err) { next(err); }
+});
+
 app.post("/me/restore-by-email", async (req, res, next) => {
   try {
     if (!stripe) return res.status(503).json({ code: "STRIPE_NOT_CONFIGURED", message: "Stripe が設定されていません。" });
