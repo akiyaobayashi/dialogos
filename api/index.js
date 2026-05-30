@@ -133,6 +133,33 @@ app.get("/me", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
+// 診断 + 即修正エンドポイント: ブラウザから開くだけで更新日をDBに書き込む
+app.get("/me/fix", async (req, res, next) => {
+  try {
+    if (!stripe || !req.user.subscription_id) {
+      return res.json({ ok: false, reason: "no stripe or no subscription_id" });
+    }
+    const sub = await stripe.subscriptions.retrieve(req.user.subscription_id);
+    const anchor = sub.billing_cycle_anchor;
+    if (!anchor) {
+      return res.json({ ok: false, reason: "no billing_cycle_anchor", sub_keys: Object.keys(sub) });
+    }
+    const next = new Date(anchor * 1000);
+    next.setMonth(next.getMonth() + 1);
+    while (next <= new Date()) next.setMonth(next.getMonth() + 1);
+    const periodEndIso = next.toISOString();
+    await sbUpdate("users", `id=eq.${encodeURIComponent(req.user.id)}`, {
+      subscription_current_period_end: periodEndIso,
+    });
+    res.json({
+      ok: true,
+      anchor_iso: new Date(anchor * 1000).toISOString(),
+      next_renewal_iso: periodEndIso,
+      next_renewal_ja: next.toLocaleDateString("ja-JP", { year: "numeric", month: "long", day: "numeric" }),
+    });
+  } catch (err) { next(err); }
+});
+
 app.get("/me/debug", async (req, res, next) => {
   try {
     const u = req.user;
