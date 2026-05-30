@@ -109,7 +109,12 @@ app.get("/health", (_req, res) => {
 
 app.use(async (req, res, next) => {
   if (req.path === "/health" || req.path === "/packages") return next();
-  const guestId = String(req.header("X-Guest-Id") || "").slice(0, 120);
+  // ヘッダー優先、なければCookieから取得（ブラウザ直接アクセス用）
+  const cookieGuestId = (req.headers.cookie || "").split(";")
+    .map(c => c.trim()).find(c => c.startsWith("dialogos_guest_id="))
+    ?.split("=")[1];
+  const rawGuestId = req.header("X-Guest-Id") || (cookieGuestId ? decodeURIComponent(cookieGuestId) : "");
+  const guestId = String(rawGuestId).slice(0, 120);
   if (!guestId || !guestId.startsWith("guest_")) {
     return res.status(400).json({ code: "NO_GUEST", message: "この端末の対話記録を読み取れませんでした。" });
   }
