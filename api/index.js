@@ -503,13 +503,10 @@ app.get("/subscription", async (req, res, next) => {
     let stripeSub = null;
 
     if (stripe) {
-      const EXPAND_INVOICE = { expand: ["latest_invoice"] };
-      const EXPAND_LIST_INVOICE = { expand: ["data.latest_invoice"] };
-
-      // 手段1: subscription_id で直接取得（最速）
+      // 手段1: subscription_id で直接取得（最速・expand なし）
       if (req.user.subscription_id) {
         try {
-          stripeSub = await stripe.subscriptions.retrieve(req.user.subscription_id, EXPAND_INVOICE);
+          stripeSub = await stripe.subscriptions.retrieve(req.user.subscription_id);
         } catch (e) {
           console.error("[subscription] retrieve by id failed:", e.message);
         }
@@ -521,7 +518,6 @@ app.get("/subscription", async (req, res, next) => {
           const list = await stripe.subscriptions.list({
             customer: req.user.stripe_customer_id,
             limit: 5,
-            ...EXPAND_LIST_INVOICE,
           });
           stripeSub = list.data.find((s) =>
             ["active", "trialing", "past_due"].includes(s.status)
@@ -537,7 +533,6 @@ app.get("/subscription", async (req, res, next) => {
           const results = await stripe.subscriptions.search({
             query: `metadata['guest_id']:'${req.guestId}'`,
             limit: 5,
-            ...EXPAND_LIST_INVOICE,
           });
           stripeSub = results.data.find((s) =>
             ["active", "trialing"].includes(s.status)
@@ -555,7 +550,6 @@ app.get("/subscription", async (req, res, next) => {
             const subs = await stripe.subscriptions.list({
               customer: customer.id,
               limit: 5,
-              ...EXPAND_LIST_INVOICE,
             });
             const found = subs.data.find((s) =>
               ["active", "trialing", "past_due"].includes(s.status)
