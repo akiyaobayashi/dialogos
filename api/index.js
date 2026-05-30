@@ -368,28 +368,52 @@ app.post("/stripe/checkout", async (req, res, next) => {
 
 app.get("/subscription", async (req, res, next) => {
   try {
-    // Stripeから常に最新の日付・状態を取得してDBを同期する
-    if (stripe && req.user.subscription_id) {
-      try {
-        const sub = await stripe.subscriptions.retrieve(req.user.subscription_id);
-        const freshData = {
-          subscription_status: sub.status,
-          subscription_current_period_end: toIsoFromUnix(sub.current_period_end),
-          subscription_cancel_at_period_end: !!sub.cancel_at_period_end,
-        };
-        await sbUpdate("users", `id=eq.${encodeURIComponent(req.user.id)}`, freshData);
-        return res.json({
-          status: sub.status,
-          plan: req.user.subscription_plan || null,
-          currentPeriodEnd: toIsoFromUnix(sub.current_period_end),
-          cancelAtPeriodEnd: !!sub.cancel_at_period_end,
-          hasCustomer: !!req.user.stripe_customer_id,
-        });
-      } catch (stripeErr) {
-        console.error("[subscription] Stripe fetch failed, falling back to DB:", stripeErr.message);
+    let stripeSub = null;
+
+    if (stripe) {
+      // 手段1: subscription_id で直接取得
+      if (req.user.subscription_id) {
+        try {
+          stripeSub = await stripe.subscriptions.retrieve(req.user.subscription_id);
+        } catch (e) {
+          console.error("[subscription] retrieve by id failed:", e.message);
+        }
+      }
+      // 手段2: subscription_id がなければ stripe_customer_id からリスト取得
+      if (!stripeSub && req.user.stripe_customer_id) {
+        try {
+          const list = await stripe.subscriptions.list({
+            customer: req.user.stripe_customer_id,
+            limit: 5,
+          });
+          stripeSub = list.data.find((s) =>
+            ["active", "trialing", "past_due"].includes(s.status)
+          ) || list.data[0] || null;
+        } catch (e) {
+          console.error("[subscription] list by customer failed:", e.message);
+        }
       }
     }
-    // Stripeが使えない場合はDBの値にフォールバック
+
+    if (stripeSub) {
+      const pkg = PACKAGES.find((p) => p.stripe_price_id === stripeSub.items?.data?.[0]?.price?.id);
+      await sbUpdate("users", `id=eq.${encodeURIComponent(req.user.id)}`, {
+        subscription_id: stripeSub.id,
+        subscription_status: stripeSub.status,
+        subscription_plan: pkg?.id || req.user.subscription_plan || null,
+        subscription_current_period_end: toIsoFromUnix(stripeSub.current_period_end),
+        subscription_cancel_at_period_end: !!stripeSub.cancel_at_period_end,
+      });
+      return res.json({
+        status: stripeSub.status,
+        plan: pkg?.id || req.user.subscription_plan || null,
+        currentPeriodEnd: toIsoFromUnix(stripeSub.current_period_end),
+        cancelAtPeriodEnd: !!stripeSub.cancel_at_period_end,
+        hasCustomer: !!req.user.stripe_customer_id,
+      });
+    }
+
+    // Stripeで見つからない場合はDBにフォールバック
     res.json({
       status: req.user.subscription_status || "none",
       plan: req.user.subscription_plan || null,
