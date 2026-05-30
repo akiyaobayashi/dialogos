@@ -65,6 +65,9 @@ function bindEvents() {
 
     const chat = e.target.closest("[data-chat]");
     if (chat) {
+      // サイドバーが開いていれば閉じる
+      document.getElementById("chatSidebar")?.classList.remove("open");
+      document.getElementById("sidebarBackdrop")?.classList.remove("visible");
       navigate("chat", { philosopherId: chat.dataset.chat, conversationId: chat.dataset.conversation || null });
       return;
     }
@@ -291,12 +294,18 @@ function renderChat() {
       </header>
 
       <div class="chat-body">
+        <div class="sidebar-backdrop" id="sidebarBackdrop"></div>
         <aside class="chat-sidebar" id="chatSidebar">
           <div class="sidebar-inner">
-            <button class="sidebar-new-btn" id="sidebarNewBtn">
-              <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4v12M4 10h12"/></svg>
-              新しい対話
-            </button>
+            <div class="sidebar-header-row">
+              <button class="sidebar-new-btn" id="sidebarNewBtn">
+                <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 4v12M4 10h12"/></svg>
+                新しい対話
+              </button>
+              <button class="sidebar-close-btn" id="sidebarCloseBtn" aria-label="サイドバーを閉じる">
+                <svg viewBox="0 0 20 20" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M15 5L5 15M5 5l10 10"/></svg>
+              </button>
+            </div>
             <div class="sidebar-section-label">履歴</div>
             <div class="sidebar-history-list" id="sidebarHistoryList">
               <div class="sidebar-loading-text">読み込み中…</div>
@@ -355,21 +364,30 @@ function renderChat() {
     this.style.height = Math.min(this.scrollHeight, 160) + "px";
   });
 
+  const sidebarEl = document.getElementById("chatSidebar");
+  const backdropEl = document.getElementById("sidebarBackdrop");
+
+  function openSidebar() {
+    sidebarEl.classList.add("open");
+    backdropEl.classList.add("visible");
+  }
+  function closeSidebar() {
+    sidebarEl.classList.remove("open");
+    backdropEl.classList.remove("visible");
+  }
+
   document.getElementById("sidebarToggleBtn").addEventListener("click", () => {
-    document.getElementById("chatSidebar").classList.toggle("open");
+    sidebarEl.classList.contains("open") ? closeSidebar() : openSidebar();
   });
+
+  document.getElementById("sidebarCloseBtn").addEventListener("click", closeSidebar);
+  backdropEl.addEventListener("click", closeSidebar);
 
   document.getElementById("sidebarNewBtn").addEventListener("click", () => {
     state.conversationId = null;
+    closeSidebar();
     renderChat();
     loadSidebarHistory();
-  });
-
-  // サイドバー外クリックで閉じる（モバイル）
-  document.getElementById("chatSidebar").addEventListener("click", (e) => {
-    if (e.target === document.getElementById("chatSidebar")) {
-      document.getElementById("chatSidebar").classList.remove("open");
-    }
   });
 
   loadSidebarHistory();
@@ -449,7 +467,10 @@ async function loadExistingMessages(sage) {
     if (!chatArea || !messages.length) return;
     chatArea.querySelector(".welcome")?.remove();
     messages.forEach(({ role, content }) => {
-      appendMessage(role === "assistant" ? "sage" : "user", content, role === "assistant" ? sage : null);
+      const msgRole = role === "assistant" ? "sage" : "user";
+      const label   = role === "assistant" ? (sage.displayName || sage.name) : "あなた";
+      const portrait = role === "assistant" ? sage.portrait : null;
+      appendMessage(msgRole, label, String(content ?? ""), portrait);
     });
   } catch {
     // サマリー経由でAIが文脈を把握するので無視

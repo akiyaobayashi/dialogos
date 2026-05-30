@@ -599,12 +599,59 @@ img.missing {
   align-self: stretch;
 }
 
+/* サイドバー背景幕（モバイル時） */
+.sidebar-backdrop {
+  display: none;
+  position: absolute;
+  inset: 0;
+  z-index: 29;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+}
+
+.sidebar-backdrop.visible {
+  display: block;
+}
+
 .sidebar-inner {
   display: flex;
   flex-direction: column;
   height: 100%;
   overflow-y: auto;
   padding: 12px 0 20px;
+}
+
+/* サイドバー上部ヘッダー行 */
+.sidebar-header-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 10px;
+}
+
+.sidebar-header-row .sidebar-new-btn {
+  flex: 1;
+  margin: 0;
+}
+
+.sidebar-close-btn {
+  display: none; /* モバイルのみ表示 */
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(184, 134, 11, 0.3);
+  border-radius: 4px;
+  background: rgba(10, 7, 4, 0.5);
+  color: rgba(212, 168, 67, 0.7);
+  cursor: pointer;
+  transition: background 0.18s, color 0.18s;
+}
+
+.sidebar-close-btn:hover {
+  background: rgba(184, 134, 11, 0.15);
+  color: var(--gold-light);
 }
 
 .sidebar-new-btn {
@@ -741,22 +788,31 @@ img.missing {
   .chat-body {
     position: relative;
   }
+  .sidebar-backdrop {
+    display: none; /* visible クラスで表示 */
+    z-index: 29;
+  }
   .chat-sidebar {
     position: absolute;
-    top: -60px;
+    top: 0;
     left: 0;
     bottom: 0;
     z-index: 30;
+    width: min(260px, 85vw);
     margin-top: 0;
-    border-radius: 8px 0 0 8px;
+    border-radius: 0;
     transform: translateX(-100%);
     box-shadow: none;
+    transition: transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
   }
   .chat-sidebar.open {
     transform: translateX(0);
-    box-shadow: 6px 0 28px rgba(0, 0, 0, 0.6);
+    box-shadow: 6px 0 32px rgba(0, 0, 0, 0.65);
   }
   .sidebar-toggle-btn {
+    display: flex;
+  }
+  .sidebar-close-btn {
     display: flex;
   }
   .chat-main {
@@ -1432,11 +1488,49 @@ input {
 
 @media (max-width: 640px) {
   .app-shell {
-    width: min(100% - 24px, 1120px);
+    width: min(100% - 20px, 1120px);
   }
 
-  .app-header,
-  .input-row,
+  /* ヘッダーは横並びを維持しナビを折り返す */
+  .app-header {
+    flex-wrap: wrap;
+    gap: 10px;
+    padding: 12px 0;
+  }
+
+  .nav-actions {
+    order: 2;
+    width: 100%;
+    justify-content: flex-start;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .nav-actions button,
+  .meter {
+    min-height: 36px;
+    padding: 6px 10px;
+    font-size: 12px;
+  }
+
+  /* 入力行: 縦積み解除 — 送信ボタンは横に置く */
+  .input-row {
+    flex-direction: row;
+    align-items: flex-end;
+    gap: 8px;
+  }
+
+  .send-button {
+    width: 48px;
+    height: 48px;
+    flex-shrink: 0;
+  }
+
+  textarea {
+    font-size: 16px; /* iOS ズーム防止 */
+  }
+
+  /* コード認証フォームは縦積みOK */
   .redeem-form {
     align-items: stretch;
     grid-template-columns: 1fr;
@@ -1449,11 +1543,12 @@ input {
 
   .solo-header {
     padding-inline: 8px;
+    padding-bottom: 16px;
   }
 
   .chat-area {
-    max-height: 50vh;
-    padding: 8px 16px 12px;
+    max-height: 52dvh;
+    padding: 8px 14px 12px;
   }
 
   .message-bubble {
