@@ -17,37 +17,37 @@ const PACKAGES = [
     id: "memory_book_monthly",
     name: "記憶の書",
     kind: "subscription",
-    credits: 400,
+    credits: 300,
     price_jpy: 680,
     stripe_price_id: "price_1Tc42DR4lgjy27fJW85jwg3v",
     description: "長期記憶、全賢者、毎月300灯火",
   },
   {
     id: "embers_150",
-    name: "灯火 150",
+    name: "灯火 100",
     kind: "credits",
-    credits: 150,
+    credits: 100,
     price_jpy: 500,
     stripe_price_id: "price_1Tc44SR4lgjy27fJdXiFNQP7",
-    description: "約5回分の深い対話"
+    description: "一つの問いを追う灯火",
   },
   {
     id: "embers_400",
-    name: "灯火 400",
+    name: "灯火 300",
     kind: "credits",
     credits: 300,
     price_jpy: 1000,
     stripe_price_id: "price_1Tc45TR4lgjy27fJrWhyAqk4",
-    description: "静かに長く潜るための灯火"
+    description: "静かに長く潜るための灯火",
   },
   {
     id: "embers_1000",
-    name: "灯火 1000",
+    name: "灯火 800",
     kind: "credits",
-    credits: 1000,
+    credits: 800,
     price_jpy: 2000,
     stripe_price_id: "price_1Tc45vR4lgjy27fJkehRTmqu",
-    description: "長い季節を賢者と歩く灯火"
+    description: "長い季節を賢者と歩く灯火",
   },
 ];
 
