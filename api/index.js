@@ -153,15 +153,19 @@ app.get("/me/debug", async (req, res, next) => {
     if (u.subscription_id) {
       try {
         const sub = await stripe.subscriptions.retrieve(u.subscription_id);
+        const inv = sub.latest_invoice;
         result.stripe.by_subscription_id = {
           found: true,
           status: sub.status,
           current_period_end: sub.current_period_end ?? "UNDEFINED",
-          current_period_end_type: typeof sub.current_period_end,
-          current_period_end_iso: sub.current_period_end ? new Date(sub.current_period_end * 1000).toISOString() : "NULL",
           billing_cycle_anchor: sub.billing_cycle_anchor ?? "UNDEFINED",
-          items_count: sub.items?.data?.length ?? "UNDEFINED",
-          price_id: sub.items?.data?.[0]?.price?.id ?? "UNDEFINED",
+          billing_cycle_anchor_iso: sub.billing_cycle_anchor ? new Date(sub.billing_cycle_anchor * 1000).toISOString() : "NULL",
+          latest_invoice_type: typeof inv,
+          latest_invoice_id: inv && typeof inv === "object" ? inv.id : (inv ?? "UNDEFINED"),
+          latest_invoice_period_end: inv && typeof inv === "object" ? (inv.period_end ?? "UNDEFINED") : "NOT_EXPANDED",
+          latest_invoice_period_end_iso: inv && typeof inv === "object" && inv.period_end ? new Date(inv.period_end * 1000).toISOString() : "NULL",
+          subPeriodEnd_result: subPeriodEnd(sub) ?? "NULL",
+          subPeriodEnd_iso: subPeriodEnd(sub) ? new Date(subPeriodEnd(sub) * 1000).toISOString() : "NULL",
         };
       } catch (e) { result.stripe.by_subscription_id = { found: false, error: e.message }; }
     } else { result.stripe.by_subscription_id = "no subscription_id in DB"; }
