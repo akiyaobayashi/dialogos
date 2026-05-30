@@ -678,20 +678,27 @@ function renderSubStatus(sub) {
 async function handleRestoreSubscription() {
   const btn = document.getElementById("restoreSubBtn");
   const errEl = document.getElementById("restoreSubError");
-  if (btn) { btn.textContent = "確認中…"; btn.disabled = true; }
-  if (errEl) errEl.textContent = "";
+  if (btn) { btn.textContent = "Stripeを確認中…"; btn.disabled = true; }
+  if (errEl) { errEl.textContent = ""; errEl.style.color = "#e08080"; }
   try {
     const user = await apiService.restoreSubscription();
     state.user = user;
     updateMeter(state.user);
     await refreshUser();
-    renderSubscription();
+    // 成功メッセージを表示してから再描画
+    if (errEl) { errEl.style.color = "#7ecfa0"; errEl.textContent = "反映されました。ページを更新しています…"; }
+    setTimeout(() => renderSubscription(), 800);
   } catch (err) {
-    const msg = err.code === "NO_PAYMENT"
-      ? "購入履歴が見つかりませんでした。Stripeの受領メールに記載のセッションIDをお知らせください。"
-      : "同期に失敗しました。しばらく待ってから再試行してください。";
+    let msg;
+    if (err.code === "NO_PAYMENT") {
+      msg = "自動取得できませんでした。Stripeの受領メールに記載の「cs_live_...」から始まるIDをコピーして開発者にお伝えください。";
+    } else if (err.code === "STRIPE_NOT_CONFIGURED") {
+      msg = "Stripe設定に問題があります。";
+    } else {
+      msg = `エラーが発生しました（${err.code || "UNKNOWN"}）。しばらく待ってから再試行してください。`;
+    }
     if (errEl) errEl.textContent = msg;
-    if (btn) { btn.textContent = "購入済みの方：ここを押して反映する"; btn.disabled = false; }
+    if (btn) { btn.textContent = "もう一度試す"; btn.disabled = false; }
   }
 }
 

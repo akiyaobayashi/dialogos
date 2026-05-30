@@ -150,30 +150,113 @@ app.post("/me/sync-session", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// 購入済みリカバリー（session_id 不要 — Stripe Search で guest_id から逆引き）
+// 購入済みリカバリー（複数戦略で逆引き）
 app.post("/me/restore-subscription", async (req, res, next) => {
   try {
     if (!stripe) return res.status(503).json({ code: "STRIPE_NOT_CONFIGURED", message: "Stripe が設定されていません。" });
 
-    const results = await stripe.checkout.sessions.search({
-      query: `metadata['guest_id']:'${req.guestId}'`,
-      limit: 10,
-    });
+    const user = await getOrCreateUser(req.guestId);
+    let applied = false;
 
-    const paidSession = results.data.find(
-      (s) => s.payment_status === "paid" || s.status === "complete"
-    );
-
-    if (!paidSession) {
-      return res.status(404).json({ code: "NO_PAYMENT", message: "この端末での購入履歴が見つかりませんでした。" });
+    // 戦略1: サブスクリプションを guest_id メタデータで検索（最も確実）
+    try {
+      const subResults = await stripe.subscriptions.search({
+        query: `metadata['guest_id']:'${req.guestId}'`,
+        limit: 5,
+      });
+      const activeSub = subResults.data.find((s) => ["active", "trialing"].includes(s.status));
+      if (activeSub) {
+        await applySubscriptionDirectly(activeSub, req.guestId, user);
+        applied = true;
+      }
+    } catch (e) {
+      console.error("[restore] subscription search failed:", e.message);
     }
 
-    const user = await getOrCreateUser(req.guestId);
-    await applySession(paidSession, req.guestId, user);
+    // 戦略2: Checkout Sessions を検索（Stripe プランによって使用可能）
+    if (!applied) {
+      try {
+        const sessionResults = await stripe.checkout.sessions.search({
+          query: `metadata['guest_id']:'${req.guestId}'`,
+          limit: 10,
+        });
+        const paidSession = sessionResults.data.find(
+          (s) => s.payment_status === "paid" || s.status === "complete"
+        );
+        if (paidSession) {
+          await applySession(paidSession, req.guestId, user);
+          applied = true;
+        }
+      } catch (e) {
+        console.error("[restore] session search failed:", e.message);
+      }
+    }
+
+    // 戦略3: stripe_customer_id が DB にあればサブスクを直接取得
+    if (!applied && user.stripe_customer_id) {
+      try {
+        const subs = await stripe.subscriptions.list({
+          customer: user.stripe_customer_id,
+          status: "active",
+          limit: 5,
+        });
+        const activeSub = subs.data[0];
+        if (activeSub) {
+          await applySubscriptionDirectly(activeSub, req.guestId, user);
+          applied = true;
+        }
+      } catch (e) {
+        console.error("[restore] customer subscription list failed:", e.message);
+      }
+    }
+
+    if (!applied) {
+      return res.status(404).json({
+        code: "NO_PAYMENT",
+        message: "購入履歴が見つかりませんでした。Stripeの受領メールに記載のセッションIDをお知らせください。",
+      });
+    }
+
     const updated = await getUserById(user.id);
     res.json(await publicUser(updated));
   } catch (err) { next(err); }
 });
+
+// サブスクリプションオブジェクトから直接状態を適用（checkout session 不要）
+async function applySubscriptionDirectly(sub, guestId, user) {
+  const pkg = PACKAGES.find((p) => p.stripe_price_id === sub.items?.data?.[0]?.price?.id)
+    || PACKAGES.find((p) => p.id === "memory_book_monthly");
+
+  const patch = {
+    subscription_id: sub.id,
+    subscription_status: sub.status,
+    subscription_plan: pkg?.id || "memory_book_monthly",
+    subscription_current_period_end: toIsoFromUnix(sub.current_period_end),
+    subscription_cancel_at_period_end: !!sub.cancel_at_period_end,
+    stripe_customer_id: typeof sub.customer === "string" ? sub.customer : user.stripe_customer_id || null,
+  };
+
+  // 初回のみクレジットを付与
+  const existing = await sbGet("purchases", `user_id=eq.${encodeURIComponent(user.id)}&kind=eq.subscription&limit=1`);
+  if (!existing.length && pkg?.credits) {
+    patch.credits = Number(user.credits || 0) + pkg.credits;
+    await sbInsert("purchases", {
+      user_id: user.id,
+      guest_id: guestId,
+      stripe_session_id: `sub_restore_${sub.id}`,
+      stripe_customer_id: patch.stripe_customer_id,
+      package_id: pkg?.id,
+      kind: "subscription",
+      amount_jpy: pkg.price_jpy,
+      credits_added: pkg.credits,
+      status: "completed",
+      completed_at: new Date().toISOString(),
+    }, false);
+  }
+
+  await sbUpdate("users", `id=eq.${encodeURIComponent(user.id)}`, patch);
+  await unlockAllCharacters(user.id);
+}
 
 app.post("/me/name", async (req, res, next) => {
   try {
