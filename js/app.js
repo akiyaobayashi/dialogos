@@ -713,35 +713,20 @@ function renderSubStatus(sub) {
       ? `<p style="color:#e08080;font-size:13px;margin:0">解約申請済み — ${periodEnd ? periodEndStr : "—"} まで利用可能</p>`
       : `<p class="sub-period">次回更新：${dateDisplay}</p>`;
 
-    const emailFallback = !periodEnd ? `
-      <div id="restoreEmailSection" style="margin-top:10px">
-        <p style="color:rgba(245,234,214,0.6);font-size:12px;margin:0 0 5px">更新日を取得できませんでした。Stripeの受領メールに記載のアドレスを入力してください</p>
-        <input id="restoreEmailInput" type="email" placeholder="購入時のメールアドレス" style="width:100%;box-sizing:border-box;padding:7px 10px;border-radius:6px;border:1px solid rgba(245,234,214,0.3);background:rgba(0,0,0,0.3);color:#f5ead6;font-size:13px">
-        <button class="secondary-button" id="restoreByEmailBtn" style="margin-top:5px;width:100%;font-size:13px">メールアドレスで同期</button>
-        <p id="restoreSubError" style="color:#e08080;font-size:12px;margin:5px 0 0;min-height:1em"></p>
-      </div>` : "";
-
     el.innerHTML = `
       <div class="sub-card active">
         <div class="sub-status-badge active">${isCanceling ? "解約申請済み" : "有効"}</div>
         <div class="sub-plan">記憶の書 — ¥680 / 月</div>
         ${cancelNote}
-        ${emailFallback}
         <div class="sub-credits">現在の灯火：${credits}</div>
         <div class="sub-actions">
           <button class="primary-button" id="portalBtn">Stripe で管理する</button>
           ${isCanceling ? "" : `<button class="secondary-button sub-cancel-btn" id="cancelBtn">解約する</button>`}
         </div>
-        <details class="otp-details">
-          <summary>別の端末でも使う（メールで同期）</summary>
-          ${otpSyncHtml("Active")}
-        </details>
       </div>
     `;
     document.getElementById("portalBtn")?.addEventListener("click", handlePortal);
     document.getElementById("cancelBtn")?.addEventListener("click", handleCancel);
-    document.getElementById("restoreByEmailBtn")?.addEventListener("click", handleRestoreByEmail);
-    bindOtpForm("Active");
 
   } else {
     const label      = sub.status === "canceled" ? "解約済み" : sub.status === "past_due" ? "支払い遅延" : "未加入";
@@ -754,46 +739,12 @@ function renderSubStatus(sub) {
         </p>
         <div class="sub-actions">
           <button class="primary-button" data-route="purchase">記憶の書を開く</button>
-          <button class="secondary-button" id="restoreSubBtn" style="margin-top:8px;width:100%">購入済みの方：自動で同期する</button>
         </div>
-        <p id="restoreSubError" style="color:#e08080;font-size:13px;margin:8px 0 0;min-height:1em"></p>
-        <div class="otp-divider">または</div>
-        ${otpSyncHtml("Inactive")}
       </div>
     `;
-    document.getElementById("restoreSubBtn")?.addEventListener("click", handleRestoreSubscription);
-    bindOtpForm("Inactive");
   }
 }
 
-async function handleRestoreSubscription() {
-  const btn = document.getElementById("restoreSubBtn");
-  const errEl = document.getElementById("restoreSubError");
-  if (btn) { btn.textContent = "Stripeを確認中…"; btn.disabled = true; }
-  if (errEl) { errEl.textContent = ""; errEl.style.color = "#e08080"; }
-  try {
-    const user = await apiService.restoreSubscription();
-    state.user = user;
-    updateMeter(state.user);
-    await refreshUser();
-    // 成功メッセージを表示してから再描画
-    if (errEl) { errEl.style.color = "#7ecfa0"; errEl.textContent = "反映されました。ページを更新しています…"; }
-    setTimeout(() => renderSubscription(), 800);
-  } catch (err) {
-    let msg;
-    if (err.code === "NO_PAYMENT") {
-      msg = "自動で見つかりませんでした。下のメールアドレス欄から同期できます。";
-      const emailSection = document.getElementById("restoreEmailSection");
-      if (emailSection) emailSection.style.display = "block";
-    } else if (err.code === "STRIPE_NOT_CONFIGURED") {
-      msg = "Stripe設定に問題があります。";
-    } else {
-      msg = `エラーが発生しました（${err.code || "UNKNOWN"}）。しばらく待ってから再試行してください。`;
-    }
-    if (errEl) errEl.textContent = msg;
-    if (btn) { btn.textContent = "もう一度試す"; btn.disabled = false; }
-  }
-}
 
 // ── 解約ページ（ログイン不要・別端末・端末紛失対応）────────────────────────────
 function renderCancel() {
@@ -1096,108 +1047,6 @@ function showSuccessBanner() {
 function hideSuccessBanner() {
   const banner = document.getElementById("successBanner");
   if (banner) banner.hidden = true;
-}
-
-// ── OTP同期フォーム ───────────────────────────────────────────────────────────
-function otpSyncHtml(context = "") {
-  return `
-    <div class="otp-sync" id="otpSync${context}">
-      <div class="otp-sync-label">📧 購入時のメールアドレスで同期する</div>
-      <div id="otpStep1${context}" class="otp-step">
-        <input type="email" id="otpEmail${context}" class="otp-email-input"
-               placeholder="購入時のメールアドレス" autocomplete="email">
-        <button class="secondary-button otp-send-btn" id="otpSendBtn${context}">認証コードを送る</button>
-        <p class="otp-error" id="otpErr1${context}"></p>
-      </div>
-      <div id="otpStep2${context}" class="otp-step" style="display:none">
-        <p class="otp-sent-notice" id="otpSentMsg${context}"></p>
-        <input type="text" id="otpCode${context}" class="otp-code-input"
-               placeholder="6桁のコード" maxlength="6" inputmode="numeric" autocomplete="one-time-code">
-        <div class="otp-verify-row">
-          <button class="primary-button" id="otpVerifyBtn${context}">同期する</button>
-          <button class="quiet-button" id="otpResendBtn${context}">再送信</button>
-        </div>
-        <p class="otp-error" id="otpErr2${context}"></p>
-      </div>
-    </div>`;
-}
-
-function bindOtpForm(context = "") {
-  const sendBtn   = document.getElementById(`otpSendBtn${context}`);
-  const verifyBtn = document.getElementById(`otpVerifyBtn${context}`);
-  const resendBtn = document.getElementById(`otpResendBtn${context}`);
-
-  sendBtn?.addEventListener("click", () => handleOtpSend(context));
-  verifyBtn?.addEventListener("click", () => handleOtpVerify(context));
-  resendBtn?.addEventListener("click", () => {
-    document.getElementById(`otpStep2${context}`).style.display = "none";
-    document.getElementById(`otpStep1${context}`).style.display = "";
-    document.getElementById(`otpErr1${context}`).textContent = "";
-  });
-
-  // Enterキーでそれぞれ送信
-  document.getElementById(`otpEmail${context}`)?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") handleOtpSend(context);
-  });
-  document.getElementById(`otpCode${context}`)?.addEventListener("keydown", (e) => {
-    if (e.key === "Enter") handleOtpVerify(context);
-  });
-}
-
-async function handleOtpSend(context = "") {
-  const emailInput = document.getElementById(`otpEmail${context}`);
-  const sendBtn    = document.getElementById(`otpSendBtn${context}`);
-  const errEl      = document.getElementById(`otpErr1${context}`);
-  const email      = emailInput?.value.trim();
-
-  if (!email) { errEl.textContent = "メールアドレスを入力してください。"; return; }
-
-  sendBtn.textContent = "送信中…";
-  sendBtn.disabled    = true;
-  errEl.textContent   = "";
-
-  try {
-    await apiService.sendOtp(email);
-    document.getElementById(`otpStep1${context}`).style.display = "none";
-    const step2 = document.getElementById(`otpStep2${context}`);
-    step2.style.display = "";
-    document.getElementById(`otpSentMsg${context}`).textContent =
-      `${email} に認証コードを送りました。迷惑メールフォルダもご確認ください。`;
-    document.getElementById(`otpCode${context}`)?.focus();
-  } catch (err) {
-    errEl.textContent    = err.message || "送信に失敗しました。";
-    sendBtn.textContent  = "認証コードを送る";
-    sendBtn.disabled     = false;
-  }
-}
-
-async function handleOtpVerify(context = "") {
-  const email     = document.getElementById(`otpEmail${context}`)?.value.trim();
-  const code      = document.getElementById(`otpCode${context}`)?.value.trim();
-  const verifyBtn = document.getElementById(`otpVerifyBtn${context}`);
-  const errEl     = document.getElementById(`otpErr2${context}`);
-
-  if (!code) { errEl.textContent = "コードを入力してください。"; return; }
-
-  verifyBtn.textContent = "同期中…";
-  verifyBtn.disabled    = true;
-  errEl.textContent     = "";
-
-  try {
-    const user = await apiService.verifyOtp(email, code);
-    state.user = user;
-    updateUsageMeter();
-    await refreshUser();
-    const syncEl = document.getElementById(`otpSync${context}`);
-    if (syncEl) {
-      syncEl.innerHTML = `<p class="otp-success">✓ 同期が完了しました。会話履歴・クレジットが引き継がれました。</p>`;
-    }
-    setTimeout(() => renderSubscription(), 1200);
-  } catch (err) {
-    errEl.textContent     = err.message || "同期に失敗しました。";
-    verifyBtn.textContent = "同期する";
-    verifyBtn.disabled    = false;
-  }
 }
 
 // ── ユーティリティ ─────────────────────────────────────────────────────────────
