@@ -220,8 +220,8 @@ app.get("/me", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-// 診断 + 即修正エンドポイント: ブラウザから開くだけで更新日をDBに書き込む
-app.get("/me/fix", async (req, res, next) => {
+// 診断 + 即修正エンドポイント: ブラウザから開くだけで更新日をDBに書き込む（管理者のみ）
+app.get("/me/fix", adminAuth, async (req, res, next) => {
   try {
     if (!stripe || !req.user.subscription_id) {
       return res.json({ ok: false, reason: "no stripe or no subscription_id" });
@@ -247,7 +247,7 @@ app.get("/me/fix", async (req, res, next) => {
   } catch (err) { next(err); }
 });
 
-app.get("/me/debug", async (req, res, next) => {
+app.get("/me/debug", adminAuth, async (req, res, next) => {
   try {
     const u = req.user;
     const result = {
