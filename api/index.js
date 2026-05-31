@@ -88,6 +88,9 @@ app.post(
       if (event.type === "checkout.session.completed") {
         await handleCheckoutCompleted(event.data.object);
       }
+      if (event.type === "invoice.paid" || event.type === "invoice.payment_succeeded") {
+        await handleInvoicePaid(event.data.object);
+      }
       if (event.type === "customer.subscription.updated" || event.type === "customer.subscription.deleted") {
         await handleSubscriptionChanged(event.data.object);
       }
@@ -737,12 +740,16 @@ app.post("/chat", async (req, res, next) => {
 
     await saveMessage(conversation.id, "assistant", reply);
     await spendUsage(req.user.id);
-    if (hasLongMemory && shouldUpdateMemory({ history, userMessage: message })) {
-      const memoryUpdate = await extractMemoryUpdates({ sage, history, userMessage: message, assistantReply: reply, currentSummary: conversation.summary || "" });
-      await applyMemoryUpdates({ userId: req.user.id, philosopherId: sage.id, update: memoryUpdate });
-      await updateConversation(conversation.id, memoryUpdate?.conversation_state_memory_update || conversation.summary || "");
-    } else {
-      await updateConversation(conversation.id, conversation.summary || "");
+    try {
+      if (hasLongMemory && shouldUpdateMemory({ history, userMessage: message })) {
+        const memoryUpdate = await extractMemoryUpdates({ sage, history, userMessage: message, assistantReply: reply, currentSummary: conversation.summary || "" });
+        await applyMemoryUpdates({ userId: req.user.id, philosopherId: sage.id, update: memoryUpdate });
+        await updateConversation(conversation.id, memoryUpdate?.conversation_state_memory_update || conversation.summary || "");
+      } else {
+        await updateConversation(conversation.id, conversation.summary || "");
+      }
+    } catch (memoryErr) {
+      console.error("[post-chat memory/update]", memoryErr.message || memoryErr);
     }
 
     const user = await getUserById(req.user.id);
@@ -830,8 +837,53 @@ async function applySession(session, guestId, user) {
   await sbUpdate("users", `id=eq.${encodeURIComponent(user.id)}`, patch);
 }
 
+async function handleInvoicePaid(invoice) {
+  if (invoice.status && invoice.status !== "paid") return;
+  if (invoice.billing_reason !== "subscription_cycle") return;
+
+  const customerId = stripeId(invoice.customer);
+  const subscriptionId = stripeId(invoice.subscription)
+    || stripeId(invoice.parent?.subscription_details?.subscription);
+  if (!customerId && !subscriptionId) return;
+
+  const user = await findUserByStripeRefs({ customerId, subscriptionId });
+  if (!user) return;
+
+  const priceId = invoice.lines?.data?.find((line) => line.price?.id)?.price?.id;
+  const pkg = PACKAGES.find((p) => p.stripe_price_id === priceId)
+    || PACKAGES.find((p) => p.id === "memory_book_monthly");
+  if (!pkg?.credits) return;
+
+  const purchaseKey = `invoice_${invoice.id}`;
+  const existing = await sbGet("purchases", `stripe_session_id=eq.${encodeURIComponent(purchaseKey)}&limit=1`);
+  if (existing[0]) return;
+
+  await sbInsert("purchases", {
+    user_id: user.id,
+    guest_id: user.guest_id,
+    stripe_session_id: purchaseKey,
+    stripe_customer_id: customerId || user.stripe_customer_id || null,
+    package_id: pkg.id,
+    kind: "subscription",
+    amount_jpy: Number(invoice.amount_paid || pkg.price_jpy || 0),
+    credits_added: pkg.credits,
+    status: "completed",
+    completed_at: new Date((invoice.status_transitions?.paid_at || invoice.created || Math.floor(Date.now() / 1000)) * 1000).toISOString(),
+  }, false);
+
+  await sbUpdate("users", `id=eq.${encodeURIComponent(user.id)}`, {
+    credits: Number(user.credits || 0) + pkg.credits,
+    stripe_customer_id: customerId || user.stripe_customer_id || null,
+    subscription_id: subscriptionId || user.subscription_id || null,
+    subscription_status: "active",
+  });
+}
+
 async function handleSubscriptionChanged(sub) {
-  const users = await sbGet("users", `stripe_customer_id=eq.${encodeURIComponent(sub.customer)}&limit=1`);
+  const customerId = stripeId(sub.customer);
+  const users = customerId
+    ? await sbGet("users", `stripe_customer_id=eq.${encodeURIComponent(customerId)}&limit=1`)
+    : [];
   const user = users[0];
   if (!user) return;
   await sbUpdate("users", `id=eq.${encodeURIComponent(user.id)}`, {
@@ -839,6 +891,22 @@ async function handleSubscriptionChanged(sub) {
     subscription_current_period_end: toIsoFromUnix(subPeriodEnd(sub)),
     subscription_cancel_at_period_end: !!sub.cancel_at_period_end,
   });
+}
+
+async function findUserByStripeRefs({ customerId, subscriptionId }) {
+  if (customerId) {
+    const [user] = await sbGet("users", `stripe_customer_id=eq.${encodeURIComponent(customerId)}&limit=1`);
+    if (user) return user;
+  }
+  if (subscriptionId) {
+    const [user] = await sbGet("users", `subscription_id=eq.${encodeURIComponent(subscriptionId)}&limit=1`);
+    if (user) return user;
+  }
+  return null;
+}
+
+function stripeId(value) {
+  return typeof value === "string" ? value : value?.id || null;
 }
 
 async function unlockAllCharacters(userId) {
@@ -901,9 +969,9 @@ async function getRecentMessages(conversationId, limit = MAX_RECENT_MESSAGES) {
 
 async function spendUsage(userId) {
   const user = await getUserById(userId);
-  const patch = Number(user.credits) > 0
-    ? { credits: Number(user.credits) - 1 }
-    : { free_count: Math.max(0, Number(user.free_count) - 1) };
+  const patch = Number(user.free_count) > 0
+    ? { free_count: Math.max(0, Number(user.free_count) - 1) }
+    : { credits: Math.max(0, Number(user.credits) - 1) };
   await sbUpdate("users", `id=eq.${encodeURIComponent(userId)}`, patch);
   await sbInsert("usage_events", { user_id: userId }, false);
 }

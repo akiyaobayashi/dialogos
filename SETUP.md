@@ -51,7 +51,7 @@ stripe listen --forward-to localhost:5177/api/stripe/webhook
 
 本番環境：Stripe ダッシュボード → 開発者 → Webhooks → エンドポイント追加
 - URL: `https://your-domain.com/api/stripe/webhook`
-- イベント: `checkout.session.completed`
+- イベント: `checkout.session.completed`, `invoice.paid`, `invoice.payment_succeeded`, `customer.subscription.updated`, `customer.subscription.deleted`
 
 ### 3. .env 最終設定
 

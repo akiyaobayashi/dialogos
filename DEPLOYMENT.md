@@ -79,6 +79,8 @@ https://your-dialogos-domain.vercel.app/api/stripe/webhook
 送るイベント:
 
 - `checkout.session.completed`
+- `invoice.paid`
+- `invoice.payment_succeeded`
 - `customer.subscription.updated`
 - `customer.subscription.deleted`
 
