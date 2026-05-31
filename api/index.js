@@ -494,6 +494,7 @@ app.post("/stripe/checkout", async (req, res, next) => {
       payment_method_types: ["card"],
       line_items: [{ price: pkg.stripe_price_id, quantity: 1 }],
       mode: pkg.kind === "subscription" ? "subscription" : "payment",
+      allow_promotion_codes: pkg.kind === "subscription",
       success_url: `${appUrl}/?payment=success&session_id={CHECKOUT_SESSION_ID}`,
       cancel_url: appUrl,
       ...(pkg.kind === "credits" ? { customer_creation: "always" } : {}),
