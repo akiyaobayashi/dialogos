@@ -928,8 +928,8 @@ async function getSelectedMemory({ userId, philosopherId, currentMessage, conver
   ].filter(Boolean).join("\n\n");
 
   return {
-    currentUserState: limitText(currentUserState || "まだ長期的な状態記録は少ない。", 900),
-    relevantMemory: limitText(selected.map(formatMemoryForPrompt).join("\n"), 1400),
+    currentUserState: limitText(currentUserState || "まだ長期的な状態記録は少ない。", 1400),
+    relevantMemory: limitText(selected.map(formatMemoryForPrompt).join("\n"), 1600),
     activeTheme: limitText(activeTheme, 700),
   };
 }
@@ -950,16 +950,17 @@ function formatMemoryForPrompt(memory) {
 
 function memoryLabel(type) {
   return ({
-    user_profile_memory: "user_profile_memory",
-    active_theme_memory: "active_theme_memory",
-    philosopher_specific_memory: "philosopher_specific_memory",
-    unresolved_questions_memory: "unresolved_questions_memory",
-    conversation_state_memory: "conversation_state_memory",
+    user_profile_memory: "人物像・価値観",
+    active_theme_memory: "現在の主要テーマ",
+    philosopher_specific_memory: "この賢者との対話で得た観察",
+    unresolved_questions_memory: "未解決の問い",
+    conversation_state_memory: "直近の対話の焦点と変化",
   })[type] || type;
 }
 
 function selectRelevantMemories(memories, currentMessage, philosopherId) {
   return memories
+    .filter(m => m.type !== "active_theme_memory")  // currentUserStateに既出のため除外
     .map((memory) => ({ memory, score: scoreMemory(memory, currentMessage, philosopherId) }))
     .filter((item) => item.score > 0)
     .sort((a, b) => b.score - a.score)
@@ -972,10 +973,10 @@ function scoreMemory(memory, currentMessage, philosopherId) {
   const memoryTokens = new Set(tokenize(memory.text));
   let score = 0;
   for (const token of tokens) if (memoryTokens.has(token)) score += 2;
-  if (memory.type === "active_theme_memory") score += 8;
+  // active_theme_memoryはselectRelevantMemoriesで除外済みなのでここでは加点しない
   if (memory.type === "philosopher_specific_memory" && memory.character_related === philosopherId) score += 7;
   if (memory.type === "unresolved_questions_memory" && score > 0) score += 8;
-  if (memory.type === "user_profile_memory") score += 2;
+  if (memory.type === "user_profile_memory" && score > 0) score += 3;
   score += Math.min(Number(memory.importance || 1), 5);
   const ageDays = memory.updated_at ? (Date.now() - new Date(memory.updated_at).getTime()) / 86400000 : 0;
   if (memory.type === "conversation_state_memory") score -= Math.min(Math.max(ageDays, 0), 10);
@@ -983,10 +984,34 @@ function scoreMemory(memory, currentMessage, philosopherId) {
 }
 
 function tokenize(text) {
-  return [...String(text || "").toLowerCase().matchAll(/[\p{L}\p{N}]{2,}/gu)]
-    .map((match) => match[0])
-    .filter((token) => !["する", "ある", "いる", "こと", "これ", "それ", "ため", "the", "and"].includes(token))
-    .slice(0, 80);
+  const str = String(text || "");
+  const stopWords = new Set(["する", "ある", "いる", "こと", "これ", "それ", "ため", "です", "ます", "でし", "まし", "the", "and"]);
+
+  // 英数字ワード
+  const words = [...str.toLowerCase().matchAll(/[a-z0-9]{2,}/g)].map(m => m[0]);
+
+  // 日本語bigram（ひらがな・カタカナ・漢字の連続を2文字ずつ切り出す）
+  // 日本語はスペースで区切られないため1文字ずつのペアで意味単位を捉える
+  const bigrams = [];
+  let chunk = "";
+  for (const ch of str) {
+    const cp = ch.codePointAt(0);
+    if ((cp >= 0x3041 && cp <= 0x9fff) || (cp >= 0xff66 && cp <= 0xff9f)) {
+      chunk += ch;
+    } else {
+      if (chunk.length >= 2) {
+        for (let i = 0; i < chunk.length - 1; i++) bigrams.push(chunk.slice(i, i + 2));
+      }
+      chunk = "";
+    }
+  }
+  if (chunk.length >= 2) {
+    for (let i = 0; i < chunk.length - 1; i++) bigrams.push(chunk.slice(i, i + 2));
+  }
+
+  return [...new Set([...words, ...bigrams])]
+    .filter(t => !stopWords.has(t))
+    .slice(0, 150);
 }
 
 function shouldUpdateMemory({ history, userMessage }) {
@@ -996,31 +1021,40 @@ function shouldUpdateMemory({ history, userMessage }) {
 }
 
 function isImportantDisclosure(text) {
-  return /悩|怖|恐|依存|自由|死|罪|赦|愛|苦|欲|快楽|性欲|タバコ|変わ|気づ|わかった|分かった|疑問|問い|なぜ|どうすれば|抜け/.test(String(text || ""));
+  return /悩|怖|恐|依存|自由|死|罪|赦|愛|苦|欲|快楽|性欲|タバコ|変わ|気づ|わかった|分かった|疑問|問い|なぜ|どうすれば|抜け|孤独|失|迷|諦|絶望|怒|憎|嫌|傷|癒|救|信|虚|無意味|限界|辞め|終わ|後悔|本当は|正直|告白|初めて言|ずっと|何年|ずっと思|なかった/.test(String(text || ""));
 }
 
 async function extractMemoryUpdates({ sage, history, userMessage, assistantReply, currentSummary }) {
   const transcript = [...history.slice(-10), { role: "assistant", content: assistantReply }]
     .map((message) => `${message.role}: ${message.content}`)
     .join("\n");
-  const prompt = `以下の会話から、哲学者対話アプリに必要な記憶だけを抽出せよ。
-雑な要約は禁止。ユーザーの思想、感情、未解決問い、思考の変化、哲学者ごとの観察を保存せよ。
-一時的な雑談や不要な情報は保存しない。保存すべき変化がなければ should_update_memory を false にする。
-現在の哲学者: ${sage.id}
+  const prompt = `以下の会話から、哲学対話アプリ用の記憶を抽出せよ。
+
+【抽出ルール】
+- 雑な要約・箇条書きの羅列は禁止。具体的・固有の内容だけを保存する。
+- ユーザーの価値観・感情・信念・人生の転機・繰り返しのテーマ・未解決の問いを対象にする。
+- 「今日の気分」「一時的な感想」「雑談」は保存しない。
+- 保存に値する新しい情報・変化がなければ should_update_memory を false にする。
+- 各配列の要素は「30〜150字の具体的な記述」とする。
+
+【各フィールドの意味】
+- user_profile_memory_updates: ユーザーの人物像・価値観・性格・生い立ち・信念など恒久的な特徴
+- active_theme_memory_updates: 今このユーザーが向き合っている人生の主要テーマ（数週間〜数ヶ月単位で続くもの）
+- conversation_state_memory_update: 次回この賢者と対話を再開したとき「どこから始めるか」が分かる焦点。未解決の問い・思考の転換点・到達した疑問を60〜150字で。ログ要約は不要。
+- philosopher_specific_memory_updates: この賢者との対話でのみ見えてきたユーザーの特性・反応・成長
+- unresolved_questions_updates: まだ答えが出ていない問い（「なぜXなのか」「どうすればYか」型の具体的な問い文）
+
+現在の賢者: ${sage.id}
 既存の直近状態: ${currentSummary || "なし"}
 最新ユーザー発言: ${userMessage}
 
-JSONのみで返す:
+JSONのみで返す（余分なテキスト不要）:
 {
   "user_profile_memory_updates": [],
   "active_theme_memory_updates": [],
   "conversation_state_memory_update": "",
   "philosopher_specific_memory_updates": {
-    "socrates": [],
-    "laozi": [],
-    "nietzsche": [],
-    "buddha": [],
-    "jesus": []
+    "${sage.id}": []
   },
   "unresolved_questions_updates": [],
   "should_update_memory": true
@@ -1117,9 +1151,7 @@ async function upsertTypedMemory(userId, { type, text, character, importance }) 
 async function generateReply({ sage, history, selectedMemory, hasLongMemory }) {
   const systemPrompt = buildSystemPrompt(sage, selectedMemory, hasLongMemory);
   return callOpenAI({
-    model: hasLongMemory
-      ? (process.env.OPENAI_PAID_MODEL || process.env.OPENAI_MODEL || "gpt-4.1")
-      : (process.env.OPENAI_FREE_MODEL || "gpt-4.1-mini"),
+    model: "gpt-4.1-mini",
     instructions: systemPrompt,
     input: history.map((m) => ({
       role: m.role === "assistant" ? "assistant" : "user",
@@ -1160,39 +1192,36 @@ function buildSystemPrompt(sage, selectedMemory, hasLongMemory) {
   const currentUserState = selectedMemory?.currentUserState || "短期記憶のみ。";
   const relevantMemory = hasLongMemory
     ? (selectedMemory?.relevantMemory || "今回の発言に強く関係する長期記憶はまだ少ない。")
-    : "無料版では長期記憶を使わない。";
-  const activeTheme = selectedMemory?.activeTheme || "未確定";
-  return `[PHILOSOPHER_ID]
-${sage.id}
+    : "";
+  const activeTheme = hasLongMemory ? (selectedMemory?.activeTheme || "") : "";
 
-[CORE_PERSONA]
-${corePersona}
+  const memorySection = hasLongMemory ? `
+[ユーザーの状態]
+${limitText(currentUserState, 1400)}
 
-[CURRENT_USER_STATE]
-${limitText(currentUserState, 900)}
+[関連する長期記憶]
+${limitText(relevantMemory, 1600)}
+` : `
+[ユーザーの状態]
+${limitText(currentUserState, 300)}
+`;
 
-[RELEVANT_MEMORY]
-${limitText(relevantMemory, 1400)}
-
-[ACTIVE_THEME]
-${limitText(activeTheme, 700)}
-
-[RESPONSE_RULES]
-- 同じ締め方を繰り返さない。
-- 哲学者っぽい名言botにならない。
-- ユーザーの直前発言に必ず具体的に反応する。
-- 抽象論だけで逃げない。
-- 1回の応答で問いを多く出しすぎない。
-- ユーザーが深刻な話をしている時は軽く扱わない。
-- 人格は維持するが、会話として自然に返す。
-- 記憶を参照しても「記憶によると」のようなシステム説明はしない。
+  return `${corePersona}
+${memorySection}
+[対話の原則]
+- 直前のユーザーの言葉の中の一点を拾って返す。前の返答と同じ締め方・比喩・問いの形を繰り返さない。
+- 問いは一度に一つ。複数の問いを並べない。
+- 記憶・蓄積情報を使っても「記憶によると」等のシステム説明をしない——自然に会話に織り込む。
+- 深刻な話を軽く扱わない。しかし人格を崩さない。
+- 名言botにならない。対話として生きた一手を打つ。
 
 ${buildPersonalityFilter(sage)}`;
 }
 
 function buildCorePersona(sage) {
   const prompt = PROMPTS[sage.id] || `${sage.name}として、思想と語り口を保って対話する。`;
-  return limitText(`${prompt}\n${sage.endingRule || ""}`, 900);
+  const endingRule = sage.endingRule ? `\n【締め方のバリエーション】\n${sage.endingRule}` : "";
+  return limitText(`${prompt}${endingRule}`, 3000);
 }
 
 function maybeSummarize(currentSummary, history, userMessage, reply) {
