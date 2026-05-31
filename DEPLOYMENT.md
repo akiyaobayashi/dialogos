@@ -89,9 +89,9 @@ https://your-dialogos-domain.vercel.app/api/stripe/webhook
 コードには反映済みです。
 
 - 記憶の書 680円: `price_1Tc42DR4lgjy27fJkehRTmqu` ではなく `price_1Tc42DR4lgjy27fJW85jwg3v`
-- 灯火 150 / 500円: `price_1Tc44SR4lgjy27fJdXiFNQP7`
-- 灯火 400 / 1000円: `price_1Tc45TR4lgjy27fJrWhyAqk4`
-- 灯火 1000 / 2000円: `price_1Tc45vR4lgjy27fJkehRTmqu`
+- 灯火 20 / 500円: `price_1Tc44SR4lgjy27fJdXiFNQP7`
+- 灯火 60 / 1000円: `price_1Tc45TR4lgjy27fJrWhyAqk4`
+- 灯火 160 / 2000円: `price_1Tc45vR4lgjy27fJkehRTmqu`
 
 ## 7. 動作確認
 

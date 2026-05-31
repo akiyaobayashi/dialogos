@@ -744,7 +744,7 @@ function renderSubStatus(sub) {
       <div class="sub-card">
         <div class="sub-status-badge ${badgeClass}">${label}</div>
         <p style="color:rgba(245,234,214,0.65);font-size:14px;line-height:1.8;margin:0">
-          記憶の書に加入すると、賢者があなたの問いを覚え、<br>毎月 300 灯火を受け取れます。
+          記憶の書に加入すると、賢者があなたの問いを覚え、<br>毎月 60 灯火を受け取れます。
         </p>
         <div class="sub-actions">
           <button class="primary-button" data-route="purchase">記憶の書を開く</button>
@@ -878,8 +878,8 @@ function renderPurchase() {
         </div>
         <div class="value-pillar">
           <span class="value-pillar-icon">◎</span>
-          <strong>毎月300灯火</strong>
-          <p>月に300の灯火が届く。問いが続く限り、火は補われる。</p>
+          <strong>毎月60灯火</strong>
+          <p>月に60の灯火が届く。問いが続く限り、火は補われる。</p>
         </div>
       </div>
 
