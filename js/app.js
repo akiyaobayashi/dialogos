@@ -531,6 +531,15 @@ async function handleSend(e) {
   appendMessage("user", "あなた", text);
   showThinking(sage);
 
+  if (state.user) {
+    if (state.user.credits > 0) {
+      state.user = { ...state.user, credits: state.user.credits - 1 };
+    } else if (state.user.free_count > 0) {
+      state.user = { ...state.user, free_count: state.user.free_count - 1 };
+    }
+    updateUsageMeter();
+  }
+
   try {
     const result = await apiService.sendChat({
       philosopherId:  state.philosopherId,
