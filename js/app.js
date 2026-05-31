@@ -1,9 +1,13 @@
 import { philosophers, getPhilosopherById } from "./data/philosophers.js";
 import { apiService } from "./services/apiService.js";
+import { initAuth, getAuthUser, signInWithGoogle, signOut, onAuthStateChange } from "./auth.js";
 
 // ── 状態 ──────────────────────────────────────────────────────────────────────
 const app        = document.querySelector("#app");
 const usageMeter = document.querySelector("#usageMeter");
+
+// LINEなどのアプリ内ブラウザはChrome/SafariとlocalStorageを共有しないためGoogleログイン不可
+const IN_APP_BROWSER = isInAppBrowser();
 
 const state = {
   route: "list",
@@ -17,10 +21,81 @@ const state = {
 
 boot();
 
+// ── アプリ内ブラウザ検知 ──────────────────────────────────────────────────────
+function isInAppBrowser() {
+  const ua = navigator.userAgent || "";
+  return /Line\//i.test(ua)           // LINE
+    || /Instagram/i.test(ua)          // Instagram
+    || /FBAN|FBAV/i.test(ua)          // Facebook
+    || /TwitterAndroid/i.test(ua)     // X(Twitter)
+    || /MicroMessenger/i.test(ua);    // WeChat
+}
+
+function showInAppWarning() {
+  const overlay = document.getElementById("inAppOverlay");
+  if (overlay) overlay.style.display = "flex";
+
+  document.getElementById("inappCopyBtn")?.addEventListener("click", () => {
+    const url = location.href;
+    const result = document.getElementById("inappCopyResult");
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(url).then(() => {
+        if (result) { result.textContent = "コピーしました！ SafariまたはChromeに貼り付けてください。"; }
+      }).catch(() => {
+        if (result) { result.textContent = url; }
+      });
+    } else {
+      if (result) { result.textContent = url; }
+    }
+  });
+
+  // 「閉じる」ボタンで警告を閉じてアプリを表示できるようにする
+  document.getElementById("inappCloseBtn")?.addEventListener("click", () => {
+    if (overlay) overlay.style.display = "none";
+  });
+}
+
 // ── ブート ─────────────────────────────────────────────────────────────────────
 async function boot() {
+  if (isInAppBrowser()) showInAppWarning();
   bindEvents();
-  await Promise.all([refreshUser(), loadPackages()]);
+
+  // セッションが localStorage にある場合はauth初期化を先に待つ
+  // （リターンユーザーのゲスト状態ちらつきを防ぐ。CDNキャッシュ済みなら 100〜300ms で完了）
+  // タイムアウト上限を設けて低速回線でも起動が止まらないようにする
+  let hasStoredSession = false;
+  try { hasStoredSession = !!localStorage.getItem("dialogos.sb.auth"); } catch {}
+
+  const packagesPromise = loadPackages();
+
+  if (hasStoredSession) {
+    await Promise.race([
+      initAuth(),
+      new Promise(r => setTimeout(r, 2000)), // 2秒でタイムアウト（低速回線の保険）
+    ]);
+  }
+
+  await Promise.all([refreshUser(), packagesPromise]);
+  renderAuthNav();
+
+  // auth状態変化の永続リスナー（ログイン・ログアウト・トークン更新に対応）
+  initAuth()
+    .then(() => onAuthStateChange(async (event, session) => {
+      if (
+        event === "SIGNED_IN" ||
+        event === "TOKEN_REFRESHED" ||
+        (event === "INITIAL_SESSION" && session)
+      ) {
+        await refreshUser();
+        renderAuthNav();
+        if (state.route !== "chat") render();
+      } else if (event === "SIGNED_OUT") {
+        await refreshUser();
+        renderAuthNav();
+        if (state.route !== "chat") render();
+      }
+    }))
+    .catch(() => {});
 
   const params = new URLSearchParams(window.location.search);
   if (params.get("payment") === "success") {
@@ -108,6 +183,73 @@ function updateSubNavBtn() {
   btn.hidden = false;
 }
 
+// ── 認証ナビゲーション ────────────────────────────────────────────────────────
+function renderAuthNav() {
+  const el = document.getElementById("authNav");
+  if (!el) return;
+  const u = state.user;
+  if (u?.logged_in) {
+    const initial = (u.display_name || u.email || "?").slice(0, 1).toUpperCase();
+    el.innerHTML = `
+      <div class="auth-user" id="authUserBtn" role="button" tabindex="0" aria-label="アカウントメニュー">
+        ${u.avatar_url
+          ? `<img class="auth-avatar" src="${escapeHtml(u.avatar_url)}" alt="" referrerpolicy="no-referrer">`
+          : `<span class="auth-avatar auth-avatar-initial">${initial}</span>`
+        }
+        <span class="auth-email">${escapeHtml(u.email || u.display_name || "ログイン中")}</span>
+        <div class="auth-menu" id="authMenu" hidden>
+          <button id="switchAccountBtn" class="auth-menu-item">別のアカウントでログイン</button>
+          <button id="logoutBtn" class="auth-menu-item">ログアウト</button>
+        </div>
+      </div>
+    `;
+    const userBtn = document.getElementById("authUserBtn");
+    const menu    = document.getElementById("authMenu");
+    userBtn?.addEventListener("click", (e) => {
+      e.stopPropagation();
+      menu.hidden = !menu.hidden;
+    });
+    document.addEventListener("click", () => { if (menu) menu.hidden = true; }, { once: true });
+    document.getElementById("switchAccountBtn")?.addEventListener("click", handleGoogleLogin);
+    document.getElementById("logoutBtn")?.addEventListener("click", handleLogout);
+  } else if (IN_APP_BROWSER) {
+    el.innerHTML = `<button class="auth-login-btn auth-login-btn--inapp" id="inappOpenBtn">ブラウザで開くとログイン可</button>`;
+    document.getElementById("inappOpenBtn")?.addEventListener("click", () => {
+      const overlay = document.getElementById("inAppOverlay");
+      if (overlay) overlay.style.display = "flex";
+    });
+  } else {
+    el.innerHTML = `<button class="auth-login-btn" id="googleLoginBtn">Googleでログイン</button>`;
+    document.getElementById("googleLoginBtn")?.addEventListener("click", handleGoogleLogin);
+  }
+}
+
+async function handleGoogleLogin() {
+  const btn = document.getElementById("googleLoginBtn");
+  if (btn) { btn.textContent = "移動中…"; btn.disabled = true; }
+  try {
+    await signInWithGoogle();
+    // OAuthリダイレクト後はページが再ロードされるので、ここには戻らない
+  } catch (err) {
+    if (btn) { btn.textContent = "Googleでログイン"; btn.disabled = false; }
+    console.error("[auth] Google login failed:", err.message);
+    alert("ログインに失敗しました。しばらく待ってから再試行してください。");
+  }
+}
+
+async function handleLogout() {
+  try {
+    await signOut();
+    state.user = null;
+    updateUsageMeter();
+    renderAuthNav();
+    await refreshUser(); // 匿名ユーザーとして再取得
+    render();
+  } catch (err) {
+    console.error("[auth] logout failed:", err.message);
+  }
+}
+
 const FLAME_SVG = `<svg class="flame-icon" viewBox="0 0 10 14" width="9" height="12" aria-hidden="true" fill="currentColor"><path d="M5 0s1.1 2.6 1.1 3.9c0 .85-.38 1.6-.88 2.05 0 0 .85-1.45-.28-3.05 0 0-.58 2.25-1.82 3.1C2.25 6.65 1.4 7.7 1.4 9.1c0 1.95 1.6 3.6 3.6 3.6s3.6-1.65 3.6-3.6C8.6 6.8 6.8 5.1 7 3.75c0 0-1.1 1.85-1.92 2.12C4.38 5.18 4.1 4.4 4.1 3.7 4.1 2 5 0 5 0z"/></svg>`;
 
 function updateUsageMeter() {
@@ -166,6 +308,7 @@ function isSubscriber() {
 
 function renderList() {
   const subscribed = isSubscriber();
+  const loggedIn = state.user?.logged_in;
   app.innerHTML = `
     <section class="hero-list">
       <p class="eyebrow">14人の哲学者・宗教家</p>
@@ -173,15 +316,18 @@ function renderList() {
       <p>あなたの答えが、本当の問いを隠している。</p>
       ${subscribed
         ? `<div class="hero-sub-badge">✦ 記憶の書加入中 — 全14賢者と対話可能</div>`
-        : `<p style="margin-top:10px;font-size:12px;color:rgba(245,234,214,0.4)">
-            別の端末で購入済みの方は
-            <button data-route="subscription" style="background:none;border:none;color:rgba(212,168,67,0.7);cursor:pointer;font-size:12px;text-decoration:underline;padding:0">こちらで同期</button>
-          </p>`}
+        : !loggedIn && !IN_APP_BROWSER
+          ? `<p style="margin-top:10px;font-size:12px;color:rgba(245,234,214,0.4)">
+              別の端末で購入済みの方は
+              <button id="heroLoginBtn" style="background:none;border:none;color:rgba(212,168,67,0.7);cursor:pointer;font-size:12px;text-decoration:underline;padding:0">Googleでログイン</button>
+            </p>`
+          : ``}
     </section>
     <section class="sage-grid">
       ${philosophers.map((sage, i) => renderSageCard(sage, i)).join("")}
     </section>
   `;
+  document.getElementById("heroLoginBtn")?.addEventListener("click", handleGoogleLogin);
 }
 
 function renderSageCard(sage, index = 0) {
@@ -190,13 +336,13 @@ function renderSageCard(sage, index = 0) {
 
   let statusLabel, statusClass, actionBtn;
 
-  if (sage.free) {
-    statusLabel = "無料体験あり";
-    statusClass = "free";
-    actionBtn   = `<button class="card-chat-btn" data-chat="${sage.id}">対話する</button>`;
-  } else if (subscribed) {
+  if (subscribed) {
     statusLabel = "対話可能";
     statusClass = "open";
+    actionBtn   = `<button class="card-chat-btn" data-chat="${sage.id}">対話する</button>`;
+  } else if (sage.free) {
+    statusLabel = "無料体験あり";
+    statusClass = "free";
     actionBtn   = `<button class="card-chat-btn" data-chat="${sage.id}">対話する</button>`;
   } else {
     statusLabel = "記憶の書で解放";
@@ -566,6 +712,7 @@ function showLockOverlay(sage) {
 
   const overlay = document.createElement("div");
   overlay.className = "lock-overlay";
+  const isLoggedIn = state.user?.logged_in;
   overlay.innerHTML = `
     <div class="lock-sigil">灯</div>
     <h2>賢者は静かに沈黙した。</h2>
@@ -573,6 +720,12 @@ function showLockOverlay(sage) {
       問いはまだ終わっていない。<br>
       ${escapeHtml(sage.name)}との続きを望むなら、灯火を継いでください。
     </p>
+    ${!isLoggedIn && !IN_APP_BROWSER ? `
+    <div style="margin:16px 0 24px;padding:16px;border:1px solid rgba(212,168,67,0.3);border-radius:10px;text-align:center">
+      <p style="font-size:13px;color:rgba(245,234,214,0.65);margin:0 0 12px">購入済みのアカウントをお持ちの方はログインで復元できます</p>
+      <button id="lockLoginBtn" class="primary-button" style="width:100%">Googleでログインして続ける</button>
+    </div>
+    ` : ``}
     <ul class="lock-value">
       <li>灯火1つにつき、賢者からの応答が1回届きます。</li>
       <li>記憶の書では、次回も問いの続きから再開できます。</li>
@@ -584,6 +737,8 @@ function showLockOverlay(sage) {
   `;
 
   container.appendChild(overlay);
+
+  overlay.querySelector("#lockLoginBtn")?.addEventListener("click", handleGoogleLogin);
 
   overlay.querySelectorAll(".purchase-card").forEach((card) => {
     card.addEventListener("click", () => handlePurchaseClick(card.dataset.pkg, "lockError"));
@@ -640,16 +795,6 @@ async function renderSubscription() {
     }
 
     renderSubStatus(sub);
-
-    // 解約ページへのリンクを追加（端末紛失時などの案内）
-    const el = document.getElementById("subStatus");
-    if (el) {
-      const footer = document.createElement("p");
-      footer.style.cssText = "margin-top:20px;font-size:12px;color:rgba(245,234,214,0.35);text-align:center";
-      footer.innerHTML = `端末を紛失した場合や別端末からの解約は
-        <button data-route="cancel" style="background:none;border:none;color:rgba(212,168,67,0.5);cursor:pointer;font-size:12px;text-decoration:underline;padding:0">こちら</button>`;
-      el.appendChild(footer);
-    }
   } catch {
     const el = document.getElementById("subStatus");
     if (el) el.innerHTML = `<p class="sub-error">情報の取得に失敗しました。再読み込みをお試しください。</p>`;
@@ -713,14 +858,23 @@ function renderSubStatus(sub) {
 }
 
 
-// ── 解約ページ（ログイン不要・別端末・端末紛失対応）────────────────────────────
+// ── 解約ページ（ログイン不要・メールアドレスで対応）────────────────────────────
 function renderCancel() {
+  const loggedIn = state.user?.logged_in;
   app.innerHTML = `
     <section class="sub-view scroll-panel">
       <p class="eyebrow">解約手続き</p>
       <h1>記憶の書を解約する</h1>
+      ${!loggedIn && !IN_APP_BROWSER ? `
+      <div style="max-width:400px;margin:0 auto 24px;padding:16px;border:1px solid rgba(212,168,67,0.3);border-radius:10px;text-align:center">
+        <p style="font-size:13px;color:rgba(245,234,214,0.65);margin:0 0 12px;line-height:1.7">
+          Googleアカウントでログインすると、<br>Stripeポータルから簡単に解約できます。
+        </p>
+        <button id="cancelLoginBtn" class="primary-button" style="width:100%">Googleでログインして解約</button>
+      </div>
+      <p style="text-align:center;font-size:12px;color:rgba(245,234,214,0.3);margin-bottom:16px">または、メールアドレスで手続き</p>
+      ` : ``}
       <p class="lead" style="color:rgba(245,234,214,0.6);font-size:14px;line-height:1.8">
-        端末を紛失した場合や別端末からでも、<br>
         Stripeの受領メールに記載のアドレスで解約できます。
       </p>
       <div style="max-width:400px;margin:24px auto 0">
@@ -738,6 +892,7 @@ function renderCancel() {
       </div>
     </section>
   `;
+  document.getElementById("cancelLoginBtn")?.addEventListener("click", handleGoogleLogin);
   document.getElementById("cancelByEmailBtn")?.addEventListener("click", handleCancelByEmail);
 }
 

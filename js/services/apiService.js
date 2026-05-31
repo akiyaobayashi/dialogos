@@ -1,3 +1,5 @@
+import { getAccessToken } from "../auth.js";
+
 const GUEST_KEY = "dialogos.guestId";
 
 function getGuestId() {
@@ -12,11 +14,19 @@ function getGuestId() {
 }
 
 async function request(path, options = {}) {
+  const token = await getAccessToken();
+  const guestId = getGuestId();
+
+  // JWTがある場合はAuthorizationヘッダーで送信（X-Guest-Idも同時送信して匿名データを統合）
+  const authHeaders = token
+    ? { "Authorization": `Bearer ${token}`, "X-Guest-Id": guestId }
+    : { "X-Guest-Id": guestId };
+
   const response = await fetch(path, {
     ...options,
     headers: {
       "Content-Type": "application/json",
-      "X-Guest-Id": getGuestId(),
+      ...authHeaders,
       ...(options.headers || {}),
     },
   });
@@ -103,5 +113,4 @@ export const apiService = {
       body: JSON.stringify({ email }),
     });
   },
-
 };

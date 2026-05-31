@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Dialogos 管理画面</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 24px 16px;
+    }
+    h1 { font-size: 22px; font-weight: 600; margin-bottom: 4px; }
+    h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; color: #94a3b8; letter-spacing: .05em; text-transform: uppercase; }
+    a { color: #7eb3f5; }
+
+    /* ── ログイン画面 ── */
+    #loginView {
+      max-width: 360px; margin: 80px auto; text-align: center;
+    }
+    #loginView h1 { margin-bottom: 24px; }
+    #secretInput {
+      width: 100%; padding: 10px 14px; border-radius: 8px;
+      border: 1px solid #334155; background: #1e293b;
+      color: #e2e8f0; font-size: 15px; margin-bottom: 12px;
+    }
+    #loginBtn {
+      width: 100%; padding: 10px 14px; border-radius: 8px;
+      background: #3b82f6; color: #fff; border: none;
+      font-size: 15px; cursor: pointer;
+    }
+    #loginBtn:hover { background: #2563eb; }
+    #loginError { color: #f87171; font-size: 13px; margin-top: 8px; }
+
+    /* ── メイン ── */
+    #adminView { max-width: 1100px; margin: 0 auto; }
+    .admin-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 28px; padding-bottom: 16px;
+      border-bottom: 1px solid #1e293b;
+    }
+    .admin-header small { color: #64748b; font-size: 12px; }
+    #logoutAdminBtn {
+      padding: 6px 14px; border-radius: 6px; border: 1px solid #334155;
+      background: transparent; color: #94a3b8; font-size: 13px; cursor: pointer;
+    }
+
+    /* ── 統計カード ── */
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+      gap: 16px; margin-bottom: 32px;
+    }
+    .stat-card {
+      background: #1e293b; border-radius: 10px; padding: 18px 20px;
+      border: 1px solid #334155;
+    }
+    .stat-card .stat-label { font-size: 12px; color: #64748b; margin-bottom: 6px; }
+    .stat-card .stat-value { font-size: 28px; font-weight: 700; color: #f1f5f9; }
+    .stat-card .stat-sub { font-size: 12px; color: #94a3b8; margin-top: 2px; }
+
+    /* ── ユーザーテーブル ── */
+    .table-header {
+      display: flex; align-items: center; justify-content: space-between;
+      margin-bottom: 12px;
+    }
+    .table-controls { display: flex; gap: 8px; }
+    .table-controls button {
+      padding: 6px 14px; border-radius: 6px; border: 1px solid #334155;
+      background: #1e293b; color: #94a3b8; font-size: 13px; cursor: pointer;
+    }
+    .table-controls button:disabled { opacity: 0.4; cursor: default; }
+    #pageLabel { font-size: 13px; color: #64748b; align-self: center; }
+
+    .user-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+    .user-table th {
+      text-align: left; padding: 8px 12px;
+      color: #64748b; font-weight: 500;
+      border-bottom: 1px solid #1e293b;
+      white-space: nowrap;
+    }
+    .user-table td {
+      padding: 8px 12px; border-bottom: 1px solid #1a2333;
+      vertical-align: middle;
+    }
+    .user-table tr:hover td { background: #131c2b; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: 11px; font-weight: 600;
+    }
+    .badge-active { background: #14532d; color: #4ade80; }
+    .badge-canceled { background: #3b1515; color: #f87171; }
+    .badge-none { background: #1e293b; color: #64748b; }
+    .badge-google { background: #1e3a5f; color: #7eb3f5; }
+
+    .credits-cell { display: flex; align-items: center; gap: 8px; }
+    .edit-credits-btn {
+      padding: 2px 8px; border-radius: 4px; border: 1px solid #334155;
+      background: transparent; color: #7eb3f5; font-size: 11px; cursor: pointer;
+    }
+
+    /* ── モーダル ── */
+    .modal-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.65);
+      display: flex; align-items: center; justify-content: center; z-index: 100;
+    }
+    .modal-box {
+      background: #1e293b; border-radius: 12px; padding: 24px;
+      width: 360px; border: 1px solid #334155;
+    }
+    .modal-box h3 { margin-bottom: 16px; font-size: 16px; }
+    .modal-box input {
+      width: 100%; padding: 8px 12px; border-radius: 6px;
+      border: 1px solid #334155; background: #0f1117;
+      color: #e2e8f0; font-size: 14px; margin-bottom: 12px;
+    }
+    .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .modal-actions button {
+      padding: 7px 16px; border-radius: 6px; border: none;
+      font-size: 13px; cursor: pointer;
+    }
+    .btn-primary { background: #3b82f6; color: #fff; }
+    .btn-secondary { background: #334155; color: #e2e8f0; }
+
+    .loading-text { color: #64748b; font-size: 14px; padding: 20px 0; }
+    .error-text { color: #f87171; font-size: 13px; }
+  </style>
+</head>
+<body>
+
+<!-- ログイン画面 -->
+<div id="loginView">
+  <h1>Dialogos 管理画面</h1>
+  <input id="secretInput" type="password" placeholder="管理者シークレット" autocomplete="current-password">
+  <button id="loginBtn">ログイン</button>
+  <p id="loginError"></p>
+</div>
+
+<!-- 管理画面本体 -->
+<div id="adminView" style="display:none">
+  <div class="admin-header">
+    <div>
+      <h1>Dialogos 管理画面</h1>
+      <small id="lastUpdated"></small>
+    </div>
+    <button id="logoutAdminBtn">ログアウト</button>
+  </div>
+
+  <!-- 統計 -->
+  <h2>サマリー</h2>
+  <div class="stats-grid" id="statsGrid">
+    <div class="stat-card"><div class="stat-label">読み込み中</div><div class="stat-value">—</div></div>
+  </div>
+
+  <!-- ユーザー一覧 -->
+  <div class="table-header">
+    <h2 style="margin-bottom:0">ユーザー一覧</h2>
+    <div style="display:flex;align-items:center;gap:12px">
+      <span id="pageLabel">ページ 1</span>
+      <div class="table-controls">
+        <button id="prevPageBtn" disabled>← 前</button>
+        <button id="nextPageBtn">次 →</button>
+        <button id="refreshBtn">更新</button>
+      </div>
+    </div>
+  </div>
+  <div id="tableContainer"><p class="loading-text">読み込み中…</p></div>
+</div>
+
+<!-- 灯火編集モーダル -->
+<div class="modal-overlay" id="creditsModal" style="display:none">
+  <div class="modal-box">
+    <h3>灯火を編集</h3>
+    <p id="creditsModalUser" style="font-size:13px;color:#94a3b8;margin-bottom:12px"></p>
+    <input id="creditsInput" type="number" min="0" max="99999" placeholder="灯火の数">
+    <div class="modal-actions">
+      <button class="btn-secondary" id="creditsModalClose">キャンセル</button>
+      <button class="btn-primary" id="creditsModalSave">保存</button>
+    </div>
+    <p id="creditsModalError" class="error-text" style="margin-top:8px"></p>
+  </div>
+</div>
+
+<script>
+  let adminSecret = "";
+  let currentPage = 1;
+  let editingUserId = null;
+
+  // ── ログイン ─────────────────────────────────────────────────────────────────
+  document.getElementById("loginBtn").addEventListener("click", attemptLogin);
+  document.getElementById("secretInput").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") attemptLogin();
+  });
+
+  async function attemptLogin() {
+    const secret = document.getElementById("secretInput").value.trim();
+    const errEl  = document.getElementById("loginError");
+    if (!secret) { errEl.textContent = "シークレットを入力してください。"; return; }
+
+    try {
+      const res = await apiFetch("/api/admin/stats", secret);
+      adminSecret = secret;
+      document.getElementById("loginView").style.display = "none";
+      document.getElementById("adminView").style.display = "block";
+      renderStats(res);
+      loadUsers();
+    } catch (err) {
+      errEl.textContent = err.message || "認証に失敗しました。";
+    }
+  }
+
+  document.getElementById("logoutAdminBtn").addEventListener("click", () => {
+    adminSecret = "";
+    document.getElementById("adminView").style.display = "none";
+    document.getElementById("loginView").style.display = "block";
+    document.getElementById("secretInput").value = "";
+  });
+
+  // ── API ──────────────────────────────────────────────────────────────────────
+  async function apiFetch(path, secret, options = {}) {
+    const res = await fetch(path, {
+      ...options,
+      headers: {
+        "Content-Type": "application/json",
+        "X-Admin-Secret": secret || adminSecret,
+        ...(options.headers || {}),
+      },
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.message || `HTTP ${res.status}`);
+    return data;
+  }
+
+  // ── 統計 ─────────────────────────────────────────────────────────────────────
+  async function refreshStats() {
+    try {
+      const stats = await apiFetch("/api/admin/stats");
+      renderStats(stats);
+    } catch (err) {
+      console.error("[admin] stats fetch failed:", err);
+    }
+  }
+
+  function renderStats(stats) {
+    const revenueStr = stats.totalRevenue != null
+      ? `¥${Number(stats.totalRevenue).toLocaleString("ja-JP")}`
+      : "—";
+    document.getElementById("statsGrid").innerHTML = `
+      <div class="stat-card">
+        <div class="stat-label">総ユーザー数</div>
+        <div class="stat-value">${stats.totalUsers ?? "—"}</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">アクティブ加入者</div>
+        <div class="stat-value">${stats.activeSubscribers ?? "—"}</div>
+        <div class="stat-sub">記憶の書 (active)</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-label">累計売上</div>
+        <div class="stat-value">${revenueStr}</div>
+        <div class="stat-sub">${stats.totalPurchases ?? "—"} 件の購入</div>
+      </div>
+    `;
+    document.getElementById("lastUpdated").textContent =
+      `最終更新: ${new Date().toLocaleTimeString("ja-JP")}`;
+  }
+
+  // ── ユーザー一覧 ──────────────────────────────────────────────────────────────
+  async function loadUsers() {
+    document.getElementById("tableContainer").innerHTML = `<p class="loading-text">読み込み中…</p>`;
+    try {
+      const users = await apiFetch(`/api/admin/users?page=${currentPage}`);
+      renderUserTable(users);
+      document.getElementById("pageLabel").textContent = `ページ ${currentPage}`;
+      document.getElementById("prevPageBtn").disabled = currentPage <= 1;
+      document.getElementById("nextPageBtn").disabled = users.length < 50;
+    } catch (err) {
+      document.getElementById("tableContainer").innerHTML =
+        `<p class="error-text">読み込み失敗: ${escHtml(err.message)}</p>`;
+    }
+  }
+
+  function renderUserTable(users) {
+    if (!users.length) {
+      document.getElementById("tableContainer").innerHTML =
+        `<p class="loading-text">ユーザーが見つかりません。</p>`;
+      return;
+    }
+
+    const rows = users.map((u) => {
+      const subBadge = u.subscription_status === "active"
+        ? `<span class="badge badge-active">active</span>`
+        : u.subscription_status === "canceled"
+          ? `<span class="badge badge-canceled">canceled</span>`
+          : `<span class="badge badge-none">${escHtml(u.subscription_status || "なし")}</span>`;
+
+      const authBadge = u.auth_user_id
+        ? `<span class="badge badge-google">Google</span>`
+        : `<span class="badge badge-none">匿名</span>`;
+
+      const periodEnd = u.subscription_current_period_end
+        ? new Date(u.subscription_current_period_end).toLocaleDateString("ja-JP")
+        : "—";
+
+      const createdAt = new Date(u.created_at).toLocaleDateString("ja-JP", {
+        year: "numeric", month: "numeric", day: "numeric"
+      });
+
+      return `
+        <tr>
+          <td style="max-width:160px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+            ${escHtml(u.email || u.display_name || u.guest_id?.slice(0, 16) + "…")}
+          </td>
+          <td>${authBadge}</td>
+          <td>${subBadge}</td>
+          <td>
+            <div class="credits-cell">
+              <span>${u.credits ?? 0}</span>
+              <button class="edit-credits-btn" data-uid="${u.id}" data-credits="${u.credits ?? 0}">編集</button>
+            </div>
+          </td>
+          <td>${u.free_count ?? 0}</td>
+          <td>${periodEnd}</td>
+          <td style="color:#475569">${createdAt}</td>
+        </tr>
+      `;
+    }).join("");
+
+    document.getElementById("tableContainer").innerHTML = `
+      <table class="user-table">
+        <thead>
+          <tr>
+            <th>メール / 名前</th>
+            <th>認証</th>
+            <th>サブスク</th>
+            <th>灯火</th>
+            <th>無料残</th>
+            <th>次回更新</th>
+            <th>登録日</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+
+    // 灯火編集ボタンのバインド
+    document.querySelectorAll(".edit-credits-btn").forEach((btn) => {
+      btn.addEventListener("click", () => openCreditsModal(btn.dataset.uid, Number(btn.dataset.credits)));
+    });
+  }
+
+  // ── ページネーション ──────────────────────────────────────────────────────────
+  document.getElementById("prevPageBtn").addEventListener("click", () => {
+    if (currentPage > 1) { currentPage--; loadUsers(); }
+  });
+  document.getElementById("nextPageBtn").addEventListener("click", () => {
+    currentPage++; loadUsers();
+  });
+  document.getElementById("refreshBtn").addEventListener("click", () => {
+    refreshStats();
+    loadUsers();
+  });
+
+  // ── 灯火編集モーダル ──────────────────────────────────────────────────────────
+  function openCreditsModal(userId, currentCredits) {
+    editingUserId = userId;
+    document.getElementById("creditsInput").value = currentCredits;
+    document.getElementById("creditsModalUser").textContent = `ユーザーID: ${userId.slice(0, 8)}…`;
+    document.getElementById("creditsModalError").textContent = "";
+    document.getElementById("creditsModal").style.display = "flex";
+    document.getElementById("creditsInput").focus();
+  }
+
+  document.getElementById("creditsModalClose").addEventListener("click", () => {
+    document.getElementById("creditsModal").style.display = "none";
+    editingUserId = null;
+  });
+
+  document.getElementById("creditsModalSave").addEventListener("click", async () => {
+    const credits = parseInt(document.getElementById("creditsInput").value);
+    const errEl = document.getElementById("creditsModalError");
+    if (isNaN(credits) || credits < 0) {
+      errEl.textContent = "有効な数値を入力してください。";
+      return;
+    }
+    const btn = document.getElementById("creditsModalSave");
+    btn.textContent = "保存中…"; btn.disabled = true;
+    try {
+      await apiFetch(`/api/admin/users/${editingUserId}`, adminSecret, {
+        method: "PATCH",
+        body: JSON.stringify({ credits }),
+      });
+      document.getElementById("creditsModal").style.display = "none";
+      editingUserId = null;
+      loadUsers();
+    } catch (err) {
+      errEl.textContent = err.message || "保存に失敗しました。";
+    } finally {
+      btn.textContent = "保存"; btn.disabled = false;
+    }
+  });
+
+  function escHtml(str) {
+    return String(str || "").replace(/[&<>"']/g, (c) =>
+      ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));
+  }
+</script>
+</body>
+</html>

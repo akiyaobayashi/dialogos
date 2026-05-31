@@ -41,6 +41,7 @@
           <span class="meter" id="usageMeter" title="灯火の残量" hidden>
             <span class="meter-inner"></span>
           </span>
+          <div id="authNav" class="auth-nav"></div>
         </nav>
       </header>
       <main id="app" class="view-root" aria-live="polite"></main>
@@ -61,6 +62,26 @@
       </div>
       <p>Dialogos · 賢者たちとの対話</p>
     </footer>
+
+    <!-- アプリ内ブラウザ警告オーバーレイ -->
+    <div id="inAppOverlay" class="inapp-overlay" style="display:none" role="dialog" aria-modal="true">
+      <div class="inapp-box">
+        <div class="inapp-icon">⚠️</div>
+        <h2 class="inapp-title">外部ブラウザで開いてください</h2>
+        <p class="inapp-body">
+          LINEなどのアプリ内ブラウザでは<br>
+          <strong>Googleログインができません。</strong>
+        </p>
+        <div class="inapp-steps">
+          <p class="inapp-steps-label">📱 開き方</p>
+          <p>右下または右上の <strong>「…」「⋮」</strong> をタップ</p>
+          <p>→ <strong>「ブラウザで開く」</strong> または <strong>「Safariで開く」</strong> を選ぶ</p>
+        </div>
+        <button class="inapp-copy-btn" id="inappCopyBtn">URLをコピーする</button>
+        <p class="inapp-copy-result" id="inappCopyResult"></p>
+        <button class="inapp-close-btn" id="inappCloseBtn">このまま続ける（ログインなし）</button>
+      </div>
+    </div>
 
     <script type="module" src="./js/app.js"></script>
   </body>

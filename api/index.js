@@ -58,6 +58,9 @@ const stripe = process.env.STRIPE_SECRET_KEY
   ? new Stripe(process.env.STRIPE_SECRET_KEY)
   : null;
 
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY || "";
+const ADMIN_SECRET = process.env.ADMIN_SECRET || "";
+
 const recentRequests = new Map();
 
 app.use((req, _res, next) => {
@@ -113,9 +116,87 @@ app.get("/health", (_req, res) => {
   });
 });
 
+// フロントエンド用パブリック設定（Supabase anon key はブラウザに公開して問題ない）
+app.get("/config", (_req, res) => {
+  res.json({
+    supabaseUrl: process.env.SUPABASE_URL || "",
+    supabaseAnonKey: SUPABASE_ANON_KEY,
+  });
+});
+
+// ── 管理者認証ミドルウェア ─────────────────────────────────────────────────────
+function adminAuth(req, res, next) {
+  const secret = req.header("X-Admin-Secret") || req.query.secret;
+  if (!ADMIN_SECRET || secret !== ADMIN_SECRET) {
+    return res.status(401).json({ code: "UNAUTHORIZED", message: "管理者権限がありません。" });
+  }
+  next();
+}
+
+app.get("/admin/stats", adminAuth, async (_req, res, next) => {
+  try {
+    const [allUsers, activeSubUsers, allPurchases] = await Promise.all([
+      sbGet("users", "select=id&limit=100000"),
+      sbGet("users", "subscription_status=eq.active&select=id&limit=100000"),
+      sbGet("purchases", "status=eq.completed&select=amount_jpy&limit=100000"),
+    ]);
+    const totalRevenue = allPurchases.reduce((sum, p) => sum + (Number(p.amount_jpy) || 0), 0);
+    res.json({
+      totalUsers: allUsers.length,
+      activeSubscribers: activeSubUsers.length,
+      totalRevenue,
+      totalPurchases: allPurchases.length,
+    });
+  } catch (err) { next(err); }
+});
+
+app.get("/admin/users", adminAuth, async (req, res, next) => {
+  try {
+    const page = Math.max(1, parseInt(req.query.page) || 1);
+    const limit = 50;
+    const offset = (page - 1) * limit;
+    const users = await sbGet(
+      "users",
+      `order=created_at.desc&limit=${limit}&offset=${offset}&select=id,guest_id,auth_user_id,email,display_name,free_count,credits,subscription_status,subscription_plan,subscription_current_period_end,created_at`
+    );
+    res.json(users);
+  } catch (err) { next(err); }
+});
+
+app.patch("/admin/users/:id", adminAuth, async (req, res, next) => {
+  try {
+    const { credits } = req.body;
+    const patch = {};
+    if (typeof credits === "number" && credits >= 0) patch.credits = credits;
+    if (!Object.keys(patch).length) return res.status(400).json({ code: "NOTHING_TO_UPDATE" });
+    const [user] = await sbUpdate("users", `id=eq.${encodeURIComponent(req.params.id)}`, patch);
+    res.json(user || {});
+  } catch (err) { next(err); }
+});
+
+// ── ユーザー認証ミドルウェア ──────────────────────────────────────────────────
 app.use(async (req, res, next) => {
-  if (req.path === "/health" || req.path === "/packages") return next();
-  // ヘッダー優先、なければCookieから取得（ブラウザ直接アクセス用）
+  if (req.path === "/health" || req.path === "/packages" || req.path === "/config") return next();
+  if (req.path.startsWith("/admin")) return next();
+
+  // Supabase JWT 認証（Googleログイン済みユーザー）
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith("Bearer ")) {
+    const jwt = authHeader.slice(7);
+    const authUser = await verifySupabaseJWT(jwt);
+    if (!authUser) {
+      return res.status(401).json({ code: "INVALID_TOKEN", message: "認証が無効です。再度ログインしてください。" });
+    }
+    const rawGuestId = req.header("X-Guest-Id") || "";
+    const mergeGuestId = rawGuestId.startsWith("guest_") ? rawGuestId.slice(0, 120) : null;
+    try {
+      req.user = await getOrCreateUserByAuth(authUser, mergeGuestId);
+      req.guestId = req.user.guest_id;
+      return next();
+    } catch (err) { return next(err); }
+  }
+
+  // フォールバック: 匿名ゲストID（後方互換）
   const cookieGuestId = (req.headers.cookie || "").split(";")
     .map(c => c.trim()).find(c => c.startsWith("dialogos_guest_id="))
     ?.split("=")[1];
@@ -928,6 +1009,64 @@ async function getOrCreateUser(guestId) {
   return user;
 }
 
+// Supabase JWTをauth/v1/userエンドポイントで検証する
+async function verifySupabaseJWT(jwt) {
+  if (!hasSupabaseConfig() || !SUPABASE_ANON_KEY) return null;
+  try {
+    const response = await fetch(`${supabaseBaseUrl()}/auth/v1/user`, {
+      headers: {
+        Authorization: `Bearer ${jwt}`,
+        apikey: SUPABASE_ANON_KEY,
+      },
+    });
+    if (!response.ok) return null;
+    return await response.json();
+  } catch { return null; }
+}
+
+// Googleログイン済みユーザーを取得または作成する（匿名アカウントとの統合も行う）
+async function getOrCreateUserByAuth(authUser, mergeGuestId) {
+  // 既存の auth_user_id で検索
+  const byAuth = await sbGet("users", `auth_user_id=eq.${encodeURIComponent(authUser.id)}&limit=1`);
+  if (byAuth[0]) {
+    // メールやアバターが変わっていれば更新
+    const patch = {};
+    if (authUser.email && byAuth[0].email !== authUser.email) patch.email = authUser.email;
+    const newAvatar = authUser.user_metadata?.avatar_url || null;
+    if (newAvatar && byAuth[0].avatar_url !== newAvatar) patch.avatar_url = newAvatar;
+    if (Object.keys(patch).length) {
+      const [updated] = await sbUpdate("users", `id=eq.${encodeURIComponent(byAuth[0].id)}`, patch);
+      return updated || byAuth[0];
+    }
+    return byAuth[0];
+  }
+
+  // 匿名ゲストアカウントが存在する場合は統合する（初回ログイン時）
+  if (mergeGuestId) {
+    const byGuest = await sbGet("users", `guest_id=eq.${encodeURIComponent(mergeGuestId)}&limit=1`);
+    if (byGuest[0]) {
+      const [merged] = await sbUpdate("users", `id=eq.${encodeURIComponent(byGuest[0].id)}`, {
+        auth_user_id: authUser.id,
+        email: authUser.email || byGuest[0].email || null,
+        avatar_url: authUser.user_metadata?.avatar_url || null,
+      });
+      return merged || byGuest[0];
+    }
+  }
+
+  // 新規ユーザー作成
+  const newGuestId = `guest_${Date.now().toString(16)}${Math.random().toString(16).slice(2, 10)}`;
+  const [user] = await sbInsert("users", {
+    guest_id: newGuestId,
+    auth_user_id: authUser.id,
+    email: authUser.email || null,
+    avatar_url: authUser.user_metadata?.avatar_url || null,
+    free_count: FREE_COUNT,
+    credits: 0,
+  });
+  return user;
+}
+
 async function getUserById(id) {
   const [user] = await sbGet("users", `id=eq.${encodeURIComponent(id)}&limit=1`);
   return user;
@@ -1353,7 +1492,10 @@ async function publicUser(user) {
   return {
     id: user.id,
     guest_id: user.guest_id,
+    email: user.email || null,
+    avatar_url: user.avatar_url || null,
     display_name: user.display_name || "",
+    logged_in: !!user.auth_user_id,
     free_count: Number(user.free_count || 0),
     credits: Number(user.credits || 0),
     unlocked_characters: unlocks.map((r) => r.character_id),

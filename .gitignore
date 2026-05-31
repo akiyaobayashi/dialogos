@@ -71,3 +71,4 @@ Thumbs.db
 
 !js/data/
 !js/data/*.js
+.vercel

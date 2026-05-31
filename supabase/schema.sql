@@ -95,6 +95,11 @@ create table if not exists email_otp (
 );
 create index if not exists idx_email_otp_email_created on email_otp(email, created_at desc);
 
+-- Google Auth support (Supabase Auth)
+alter table users add column if not exists auth_user_id text unique;
+alter table users add column if not exists avatar_url text;
+create index if not exists idx_users_auth_user_id on users(auth_user_id);
+
 -- RLS: enable protection on all app tables.
 -- Dialogos does not expose Supabase directly to the browser.
 -- Vercel API uses SUPABASE_SERVICE_ROLE_KEY server-side, which bypasses RLS.

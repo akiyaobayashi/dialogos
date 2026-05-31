@@ -2891,3 +2891,196 @@ button {
   font-size: 13px;
   margin-top: 20px;
 }
+
+/* ── Googleログイン / 認証ナビ ───────────────────────────────────────────────── */
+.auth-nav {
+  display: flex;
+  align-items: center;
+}
+
+.auth-login-btn {
+  padding: 7px 14px;
+  border: 1px solid rgba(212, 168, 67, 0.45);
+  border-radius: 4px;
+  background: rgba(20, 14, 5, 0.72);
+  color: var(--gold-light);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  white-space: nowrap;
+}
+
+.auth-login-btn:hover {
+  background: rgba(184, 134, 11, 0.12);
+  border-color: rgba(212, 168, 67, 0.7);
+}
+
+.auth-user {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  border: 1px solid rgba(212, 168, 67, 0.22);
+}
+
+.auth-user:hover {
+  background: rgba(184, 134, 11, 0.08);
+}
+
+.auth-avatar {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid rgba(212, 168, 67, 0.35);
+}
+
+.auth-avatar-initial {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(212, 168, 67, 0.2);
+  color: var(--gold-light);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.auth-email {
+  font-size: 12px;
+  color: rgba(245, 234, 214, 0.6);
+  max-width: 130px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auth-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  background: #1a1108;
+  border: 1px solid rgba(212, 168, 67, 0.3);
+  border-radius: 6px;
+  min-width: 140px;
+  z-index: 100;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.auth-menu-item {
+  display: block;
+  width: 100%;
+  padding: 10px 14px;
+  text-align: left;
+  background: none;
+  border: none;
+  color: rgba(245, 234, 214, 0.75);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.auth-menu-item:hover {
+  background: rgba(184, 134, 11, 0.1);
+  color: var(--gold-light);
+}
+
+/* ── アプリ内ブラウザ警告 ────────────────────────────────────────────────────── */
+.inapp-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 8, 3, 0.97);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: 24px;
+}
+
+.inapp-box {
+  max-width: 380px;
+  width: 100%;
+  text-align: center;
+}
+
+.inapp-icon {
+  font-size: 44px;
+  margin-bottom: 16px;
+}
+
+.inapp-title {
+  font-family: var(--font-serif-jp, "Noto Serif JP", serif);
+  font-size: 20px;
+  color: var(--gold-light, #f5ead6);
+  margin-bottom: 14px;
+  font-weight: 600;
+}
+
+.inapp-body {
+  font-size: 15px;
+  color: rgba(245, 234, 214, 0.75);
+  line-height: 1.8;
+  margin-bottom: 24px;
+}
+
+.inapp-steps {
+  background: rgba(212, 168, 67, 0.08);
+  border: 1px solid rgba(212, 168, 67, 0.25);
+  border-radius: 10px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  text-align: left;
+}
+
+.inapp-steps-label {
+  font-size: 13px;
+  color: rgba(212, 168, 67, 0.8);
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+.inapp-steps p {
+  font-size: 14px;
+  color: rgba(245, 234, 214, 0.8);
+  line-height: 1.8;
+  margin: 0;
+}
+
+.inapp-copy-btn {
+  width: 100%;
+  padding: 13px;
+  border-radius: 6px;
+  border: 1px solid rgba(212, 168, 67, 0.5);
+  background: rgba(212, 168, 67, 0.1);
+  color: var(--gold-light, #f5ead6);
+  font-size: 15px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.inapp-copy-btn:hover {
+  background: rgba(212, 168, 67, 0.18);
+}
+
+.inapp-copy-result {
+  margin-top: 12px;
+  font-size: 13px;
+  color: rgba(212, 168, 67, 0.85);
+  word-break: break-all;
+  line-height: 1.6;
+  min-height: 1.4em;
+}
+
+.inapp-close-btn {
+  margin-top: 16px;
+  width: 100%;
+  padding: 11px;
+  border-radius: 6px;
+  border: none;
+  background: transparent;
+  color: rgba(245, 234, 214, 0.35);
+  font-size: 13px;
+  cursor: pointer;
+  text-decoration: underline;
+}
