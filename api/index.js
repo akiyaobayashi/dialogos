@@ -1151,7 +1151,7 @@ async function upsertTypedMemory(userId, { type, text, character, importance }) 
 async function generateReply({ sage, history, selectedMemory, hasLongMemory }) {
   const systemPrompt = buildSystemPrompt(sage, selectedMemory, hasLongMemory);
   return callOpenAI({
-    model: "gpt-5",
+    model: "gpt-5.5",
     instructions: systemPrompt,
     input: history.map((m) => ({
       role: m.role === "assistant" ? "assistant" : "user",
