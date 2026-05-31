@@ -675,6 +675,7 @@ async function handleSend(e) {
 // ── メッセージ追加 ─────────────────────────────────────────────────────────────
 function appendMessage(role, label, text, portrait) {
   const chatArea = document.querySelector("#chatArea");
+  if (!chatArea) return;
   chatArea.querySelector(".welcome")?.remove();
   const div = document.createElement("div");
   div.className = `message ${role}`;
@@ -689,6 +690,7 @@ function appendMessage(role, label, text, portrait) {
 
 function showThinking(sage) {
   const chatArea = document.querySelector("#chatArea");
+  if (!chatArea) return;
   const div      = document.createElement("div");
   div.id         = "thinking";
   div.className  = "thinking";
