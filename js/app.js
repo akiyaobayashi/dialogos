@@ -31,7 +31,7 @@ async function boot() {
       try {
         const user = await apiService.syncSession(sessionId);
         state.user = user;
-        updateMeter(state.user);
+        updateUsageMeter();
       } catch (_) {
         // webhookが先に処理済みの場合など。通常のrefreshにフォールバック
       }
@@ -346,7 +346,6 @@ function renderChat() {
   `;
 
   document.querySelector("#composer").addEventListener("submit", handleSend);
-  maybeAskName(sage);
 
   const input = document.querySelector("#messageInput");
   input.addEventListener("keydown", (e) => {
@@ -476,38 +475,6 @@ function usageSummaryText() {
   if (u.credits > 0) return `✦ 灯火 ${u.credits} · 賢者があなたを覚えている`;
   if (u.free_count > 0) return `残り ${u.free_count} 問の試み · 灯火を継ぐと全賢者と対話できる`;
   return "灯火を継いで、対話を続けよ";
-}
-
-// ── 名前の儀式 ─────────────────────────────────────────────────────────────────
-function maybeAskName(sage) {
-  const stored = localStorage.getItem("dialogos.guestName");
-  if (stored !== null) return;
-
-  const scrollContainer = document.querySelector(".scroll-container");
-  if (!scrollContainer) return;
-
-  const ritual = document.createElement("div");
-  ritual.className = "name-ritual";
-  ritual.innerHTML = `
-    <p><strong>${escapeHtml(sage.name)}</strong>はあなたの名を知らない。<br>名を告げれば、対話はより深くなります。</p>
-    <form id="nameRitualForm">
-      <input id="nameRitualInput" placeholder="あなたの名（任意）" autocomplete="off" maxlength="32">
-      <button class="primary-button" type="submit">告げる</button>
-      <button class="quiet-button" type="button" id="nameRitualSkip">今は省く</button>
-    </form>
-  `;
-  scrollContainer.parentElement.insertBefore(ritual, scrollContainer);
-
-  ritual.querySelector("#nameRitualForm").addEventListener("submit", (e) => {
-    e.preventDefault();
-    const name = document.querySelector("#nameRitualInput")?.value.trim() || "";
-    localStorage.setItem("dialogos.guestName", name);
-    ritual.remove();
-  });
-  ritual.querySelector("#nameRitualSkip").addEventListener("click", () => {
-    localStorage.setItem("dialogos.guestName", "");
-    ritual.remove();
-  });
 }
 
 // ── チャット送信 ──────────────────────────────────────────────────────────────
@@ -806,7 +773,7 @@ async function handleRestoreByEmail() {
   try {
     const user = await apiService.restoreByEmail(email);
     state.user = user;
-    updateMeter(state.user);
+    updateUsageMeter();
     await refreshUser();
     if (errEl) { errEl.style.color = "#7ecfa0"; errEl.textContent = "反映されました。"; }
     setTimeout(() => renderSubscription(), 800);

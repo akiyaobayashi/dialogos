@@ -1975,47 +1975,9 @@ input {
 }
 
 
-/* Dialogos guest memory UX: start */
-.name-ritual {
-  margin: 12px auto 20px;
-  max-width: 620px;
-  padding: 16px;
-  border: 1px solid rgba(184, 134, 11, 0.28);
-  background: rgba(26, 18, 10, 0.72);
-  color: var(--parchment);
-  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.26);
-}
-
-.name-ritual p {
-  margin: 0 0 12px;
-  line-height: 1.8;
-}
-
-.name-ritual form {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto;
-  gap: 10px;
-  align-items: center;
-}
-
-.quiet-button {
-  min-height: 40px;
-  border: 1px solid rgba(184, 134, 11, 0.18);
-  background: rgba(245, 234, 214, 0.04);
-  color: rgba(245, 234, 214, 0.68);
-  padding: 0 14px;
-}
-
 .usage-box {
   gap: 8px;
 }
-
-@media (max-width: 680px) {
-  .name-ritual form {
-    grid-template-columns: 1fr;
-  }
-}
-/* Dialogos guest memory UX: end */
 
 
 /* Dialogos legal pages: start */
